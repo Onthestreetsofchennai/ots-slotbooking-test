@@ -1,0 +1,1626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- PRE-RENDER SESSION CHECK: runs before body paints to avoid login flash for active sessions -->
+<script>
+
+(function(){
+  var isAdminEntry = /admin\.html$/i.test(location.pathname || '');
+  try{
+    var s=!isAdminEntry ? JSON.parse(localStorage.getItem('ots_member_v2')||'null') : null;
+    if(s&&(s.phone||s.email)){
+      document.documentElement.setAttribute('data-member-active','1');
+    }
+  }catch(e){}
+  try{
+    var _adminActive=false;
+    if(isAdminEntry){
+      try{var al=JSON.parse(localStorage.getItem('ots_admin_session')||'null');if(al&&(al.u||al.r||al.v))_adminActive=true;}catch(_){}
+      try{var as2=JSON.parse(sessionStorage.getItem('ots_admin_session')||'null');if(as2&&(as2.u||as2.r||as2.v))_adminActive=true;}catch(_){}
+      try{if(document.cookie.split(';').some(function(c){return c.trim().indexOf('ots_admin_s=1')===0;}))_adminActive=true;}catch(_){}
+    }
+    if(_adminActive) document.documentElement.setAttribute('data-admin-active','1');
+  }catch(e){}
+})();
+
+</script>
+<!-- Neon DB: No SDK needed - uses native fetch() to SQL-over-HTTP endpoint -->
+<meta name="theme-color" content="#f0771e">
+<meta name="description" content="Book On The Streets performance slots.">
+<meta name="application-name" content="OTS Booking">
+<meta name="msapplication-TileColor" content="#0d0b1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OTS Booking">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ON THE STREETS - Slot Booking</title>
+<script>
+window.OTS_APP_MODE = 'member';
+window.OTS_MEMBER_ENTRY = './index.html';
+window.OTS_ADMIN_ENTRY = './admin.html';
+</script>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="./ots-icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="./ots-apple-touch-icon.png">
+<!-- Updated by ChatGPT: backend OTP login integrated, Clerk removed -->
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./ots-main.css">
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+</head>
+<body class="app-member">
+
+<div class="blob blob-1"></div>
+<div class="blob blob-2"></div>
+<div class="blob blob-3"></div>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-inner">
+    <div id="navLogo" onclick="handleLogoClick()" title="On The Streets" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:.75rem;"><img src="./ots-brand-mark.png" decoding="async" alt="On The Streets of Chennai" style="height:50px;width:auto;display:block;"> <span class="pending-badge" id="pending-count-badge" style="display:none">0</span></div>
+    <div class="nav-tabs" id="publicNavTabs">
+      <button class="ntab active" id="ntab-home" onclick="showPage('home')">&#127908; Home</button>
+      <button class="ntab" id="ntab-form" style="display:none;" onclick="showPage('form')">&#128221; Book</button>
+    </div>
+    <div style="display:flex;gap:.8rem;align-items:center;">
+      <button class="logout-btn" id="logoutBtn" onclick="adminLogout()"> Logout</button>
+      <span id="syncStatus" style="font-size:.68rem;color:var(--muted);letter-spacing:.06em;transition:opacity .5s;opacity:0;"></span>
+      <!-- Member login / logout buttons -->
+      <span id="memberGreeting" style="display:none;" onclick="showPage('profile')" title="My Profile">
+        <div class="nav-avatar" id="navAvatar"><span id="navAvatarInitial"></span><img id="navAvatarImg" src="" alt="" style="display:none;"></div>
+        <span class="nav-member-name" id="navMemberName"></span>
+      </span>
+      <button id="memberLoginNavBtn" onclick="showMemberLogin()" style="display:none;">&#128241; Member Login</button>
+      <button id="myBookingsBtn" style="background:transparent;border:1px solid rgba(112,186,244,.4);color:var(--blue);font-family:'DM Sans',sans-serif;font-size:.78rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:.5rem 1.2rem;cursor:pointer;border-radius:3px;transition:all .2s;display:none;" onclick="showPage('myrequests')">&#128203; My Requests</button>
+      <span class="notif-bell-wrap" id="notifBellWrap">
+        <button class="notif-bell-btn" onclick="toggleNotifPanel()" title="Notifications">&#128276;<span class="notif-badge" id="notifBadge"></span></button>
+      </span>
+    </div>
+  </div>
+</nav>
+
+<!-- ============== PAGE 1: HOME ============== -->
+<div class="page" id="page-home">
+  <section class="hero">
+    <div style="display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:3rem;">
+      <div>
+        <div class="hero-tag">&#10022; Street Performance Booking</div>
+        <h1>Claim Your <span class="grad-text">Street</span><br>Performance Slot</h1>
+      </div>
+      <div style="flex-shrink:0;">
+        <img src="./ots-brand-mark.png" decoding="async" loading="lazy" alt="On The Streets of Chennai" style="height:190px;width:auto;display:block;">
+      </div>
+    </div>
+  </section>
+
+  <!-- -- SCROLLING PERFORMANCE IMAGES -- -->
+  <div class="perf-strip-wrap">
+    <div class="perf-strip" id="perfStrip">
+      <!-- SLOT 1 - replace src with your photo -->
+      <div class="perf-img-card placeholder" data-label="Street Show">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- SLOT 2 -->
+      <div class="perf-img-card placeholder" data-label="Live Act">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- SLOT 3 -->
+      <div class="perf-img-card placeholder" data-label="Performance">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- SLOT 4 -->
+      <div class="perf-img-card placeholder" data-label="Crowd">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- SLOT 5 -->
+      <div class="perf-img-card placeholder" data-label="Event">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- SLOT 6 -->
+      <div class="perf-img-card placeholder" data-label="Night Show">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- SLOT 7 -->
+      <div class="perf-img-card placeholder" data-label="Dance">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <!-- Duplicates for seamless loop -->
+      <div class="perf-img-card placeholder" data-label="Street Show">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <div class="perf-img-card placeholder" data-label="Live Act">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <div class="perf-img-card placeholder" data-label="Performance">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <div class="perf-img-card placeholder" data-label="Crowd">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <div class="perf-img-card placeholder" data-label="Event">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <div class="perf-img-card placeholder" data-label="Night Show">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+      <div class="perf-img-card placeholder" data-label="Dance">
+        <span class="ph-icon"></span><span class="ph-txt">Photos</span>
+      </div>
+    </div>
+  </div>
+
+  <section class="community-news-wrap" id="communityNewsWrap" style="display:none;">
+    <div class="community-news-head">
+      <span>Community Updates</span>
+      <strong>News & Events</strong>
+    </div>
+    <div class="community-news-strip" id="communityNewsStrip"></div>
+  </section>
+
+  <div class="cta-dashboard">
+    <div class="cta-card">
+      <div class="cta-left">
+        <div class="cta-eyebrow">Ready to Perform?</div>
+        <div class="cta-heading">Find Your <span class="hl">Perfect Slot</span><br>& Book It Now</div>
+        <div class="cta-sub">Browse available dates and venues across Chennai. Pick your slot, submit your request, and get approved by our team.</div>
+      </div>
+      <div class="cta-right">
+        <button class="btn-cta-book" onclick="showPage('venues')">
+          Book a Slot <span class="cta-arrow">&#8594;</span>
+        </button>
+        <button class="lb-cta" onclick="showPage('leaderboard')" style="margin-top:.8rem;">
+           &#127942; Performer Rankings
+        </button>
+        <div class="cta-note">&#8987; Slots are subject to admin approval</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GIG CALENDAR -->
+  <div class="gig-cal-section">
+    <div class="gc-hdr">
+      <div class="gc-eyebrow">Live Shows</div>
+      <h2 class="gc-title">SCHEDULE</h2>
+      <p class="gc-sub">Confirmed performances coming up on the streets of Chennai</p>
+    </div>
+    <div class="gc-list" id="gigCalendarList">
+      <div class="gc-empty">Loading upcoming shows...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== PAGE 2: VENUE SELECTION + CALENDAR ============== -->
+<div class="page" id="page-venues">
+  <div class="venues-page-wrap">
+    <div class="venues-page-header">
+      <div>
+        <h2 style="font-family:'Playfair Display',serif;font-size:1.8rem;font-weight:900;margin-bottom:.3rem;">Pick a Date & Venue</h2>
+        <p style="font-size:.85rem;color:var(--muted);">Select a date from the calendar to see available venues</p>
+      </div>
+      <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('home')">Back</button>
+    </div>
+
+    <div class="venues-layout">
+      <!-- CALENDAR -->
+      <div class="calendar-panel">
+        <div class="cal-header">
+          <div class="cal-month" id="calMonthLabel">March 2026</div>
+          <div class="cal-nav">
+            <button class="cal-nav-btn" onclick="calPrev()"><</button>
+            <button class="cal-nav-btn" onclick="calNext()">></button>
+          </div>
+        </div>
+        <div class="cal-weekdays">
+          <div class="cal-wday">Su</div><div class="cal-wday">Mo</div><div class="cal-wday">Tu</div>
+          <div class="cal-wday">We</div><div class="cal-wday">Th</div><div class="cal-wday">Fr</div>
+          <div class="cal-wday">Sa</div>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+        <div class="cal-legend">
+          <div class="cal-legend-item"><div class="cal-legend-dot" style="background:var(--orange);"></div>Has venues</div>
+          <div class="cal-legend-item"><div class="cal-legend-dot" style="background:linear-gradient(135deg,#5b7cfa,#70BAF4);"></div>Selected</div>
+          <div class="cal-legend-item"><div class="cal-legend-dot" style="background:var(--blue);"></div>Today</div>
+        </div>
+      </div>
+
+      <!-- VENUE LIST -->
+      <div>
+        <div class="venue-list-header">
+          <div class="venue-list-title" id="venueListTitle">Upcoming Venues</div>
+        </div>
+        <div class="venue-list-panel" id="venueListPanel">
+          <div id="venueList">
+            <div class="no-venues-day"><span class="nv-icon">&#128197;</span>Loading venues...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== PAGE 3: BOOKING FORM ============== -->
+<div class="page" id="page-form">
+  <div class="booking-grid">
+    <div class="panel">
+      <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.8rem;">
+        <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('venues')">Change Venue</button>
+        <div id="form-venue-badge" style="font-size:.82rem;color:var(--muted);"></div>
+      </div>
+      <p class="section-label sl-purple">Your Details</p>
+      <div class="form-group"><label class="form-label">Booking Person Name</label><input type="text" class="form-input" id="inp-booker" placeholder="Your name"></div>
+      <div class="form-group"><label class="form-label">Team / Performer Name</label><input type="text" class="form-input" id="inp-band" placeholder="e.g. The Velvet Strings or Arjun Band"></div>
+      <div class="form-group">
+        <label class="form-label">Logged-in Email</label>
+        <input type="email" class="form-input readonly-session" id="inp-email" placeholder="Email will auto-fill after login" readonly>
+        <div class="session-note">This email comes from OTP login and will stay with your request locally.</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Phone Number</label>
+          <div style="position:relative;">
+            <input type="tel" class="form-input" id="inp-phone" placeholder="+91 98765 43210" oninput="validatePhone()" onblur="validatePhoneBlur()">
+            <span id="phone-icon" style="position:absolute;right:.9rem;top:50%;transform:translateY(-50%);font-size:1rem;pointer-events:none;"></span>
+          </div>
+          <div class="field-err" id="phone-err"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Performance Type</label>
+          <select class="form-input" id="inp-type" onchange="updateSummary()">
+            <option value="">Select type</option>
+            <option value="Solo">Solo</option>
+            <option value="2 Piece">2 Piece</option>
+            <option value="3 Piece">3 Piece</option>
+            <option value="4 Piece">4 Piece</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Special Requirements (optional)</label><input type="text" class="form-input" id="inp-notes" placeholder="Amp setup, mic stand, PA system..."></div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:1.5rem;">
+      <div class="summary-card">
+        <div class="summary-title">Booking Summary</div>
+        <div class="summary-row"><span class="summary-key">Venue</span><span class="summary-val empty" id="sum-venue">Not selected</span></div>
+        <div class="summary-row"><span class="summary-key">Booked By</span><span class="summary-val empty" id="sum-booker">Not selected</span></div>
+        <div class="summary-row"><span class="summary-key">Team</span><span class="summary-val empty" id="sum-team">Not selected</span></div>
+        <div class="summary-row"><span class="summary-key">Type</span><span class="summary-val empty" id="sum-type">Not selected</span></div>
+        <div class="summary-divider"></div>
+        <div class="summary-row"><span class="summary-key">Slot</span><span class="summary-val empty" id="sum-price" style="text-align:right;max-width:180px;">-</span></div>
+        <button class="btn-book" id="bookBtn" onclick="submitBooking()" disabled style="margin-top:1.4rem;">
+          Submit Request 
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============== MY REQUESTS PAGE ============== -->
+<div class="page" id="page-myrequests">
+  <div class="myrequests-wrap">
+    <div class="myrequests-header">
+      <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('venues')" style="margin-bottom:0;">Back to Venues</button>
+    </div>
+
+    <!-- Member personal stats (hidden when not logged in) -->
+    <div id="memberStatsSection" style="display:none;margin-top:1.4rem;">
+      <!-- Profile header -->
+      <div class="my-profile-header">
+        <div class="my-profile-avatar" id="myProfileAvatar" onclick="openPhotoViewer(memberName||memberEmail||memberPhone, memberAvatarUrl, null)" title="View profile photo">
+          <img id="myProfileAvatarImg" src="" alt="" style="display:none;">
+          <span id="myProfileAvatarInitial"></span>
+        </div>
+        <div class="my-profile-info">
+          <div class="my-profile-name" id="myProfileName"></div>
+          <div class="my-profile-hint" style="margin-bottom:.1rem;">Tap avatar - <button class="prof-edit-link" onclick="showPage('profile')">Edit Profile ></button></div>
+          <div id="profCompMiniWrap"></div>
+        </div>
+      </div>
+      <p class="section-label sl-orange" style="margin:0 0 .75rem;">My Performance Stats</p>
+      <div class="member-stats-bar">
+        <div class="ms-stat"><div class="ms-stat-num" id="ms-shows">-</div><div class="ms-stat-label">Shows Done</div></div>
+        <div class="ms-stat"><div class="ms-stat-num" id="ms-points">-</div><div class="ms-stat-label">Points</div></div>
+        <div class="ms-stat"><div class="ms-stat-num" id="ms-rank">#-</div><div class="ms-stat-label">Monthly Rank</div></div>
+      </div>
+      <div id="myPerfList" class="my-perf-table" style="display:none;"></div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:1.4rem;flex-wrap:wrap;gap:.5rem;">
+      <p class="section-label sl-blue" style="margin:0;">My Slot Requests</p>
+      <div style="display:flex;gap:.45rem;flex-wrap:wrap;justify-content:flex-end;">
+        <button id="restoreClearedBtn" onclick="restoreClearedRequests()" style="background:transparent;border:1px solid rgba(112,186,244,.28);color:#70BAF4;font-family:'DM Sans',sans-serif;font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.35rem .85rem;border-radius:3px;cursor:pointer;"> Restore Cleared</button>
+        <button id="clearAllBtn" onclick="clearAllDismissable()" style="display:none;background:transparent;border:1px solid rgba(255,255,255,.2);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.35rem .85rem;border-radius:3px;cursor:pointer;transition:all .2s;" onmouseover="this.style.background='rgba(255,255,255,.07)'" onmouseout="this.style.background='transparent'"> Clear All</button>
+      </div>
+    </div>
+    <div class="bookings-panel" id="bookingsSection">
+      <div id="bookingsList"><div class="empty-state">No requests yet.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== MEMBER CHAT PAGE ============== -->
+<div class="page" id="page-chat">
+  <div class="chat-wrap">
+    <div class="chat-header">
+      <button class="btn-back-home chat-back-btn" onclick="showPage('home')" style="margin-bottom:0;">Back</button>
+      <div class="chat-heading">
+        <div class="section-label sl-blue" style="margin:0;">Member Chat</div>
+        <h2 class="chat-title">Messages</h2>
+        <p class="chat-copy">Search members, keep show updates in one place, and report anything that needs admin support.</p>
+      </div>
+      <button class="lb-refresh" onclick="refreshChatPage(true)" style="white-space:nowrap;">Refresh</button>
+    </div>
+
+    <div class="chat-layout">
+      <section class="chat-members-panel">
+        <div class="chat-panel-head">
+          <div>
+            <strong>Members</strong>
+            <span>Directory</span>
+          </div>
+        </div>
+        <div class="chat-search-row">
+          <input id="chatMemberSearch" class="chat-search-input" type="search" placeholder="Search member or zone..." oninput="renderChatMembers()">
+        </div>
+        <div id="chatMembersList" class="chat-member-list">
+          <div class="chat-empty">Loading members...</div>
+        </div>
+      </section>
+
+      <section class="chat-thread-panel">
+        <div class="chat-thread-head">
+          <div class="chat-peer">
+            <div id="chatPeerAvatar" class="chat-peer-avatar">?</div>
+            <div>
+              <div id="chatThreadTitle" class="chat-thread-title">Select a member</div>
+              <div id="chatThreadSub" class="chat-thread-sub">Choose someone from the member list to start chatting.</div>
+            </div>
+          </div>
+          <div class="chat-thread-actions">
+            <button id="chatBlockBtn" class="chat-icon-btn" onclick="blockActiveChatMember()" style="display:none;">Block</button>
+            <button id="chatReportBtn" class="chat-icon-btn" onclick="reportActiveChatMember()" style="display:none;">Report</button>
+          </div>
+        </div>
+        <div id="chatMessages" class="chat-messages">
+          <div class="chat-empty chat-empty-hero">
+            <strong>Select a member</strong>
+            <span>Your conversation will open here.</span>
+          </div>
+        </div>
+        <div class="chat-compose">
+          <textarea id="chatInput" class="chat-input" rows="1" maxlength="700" placeholder="Type a message..." oninput="autoGrowChatInput(this)" onkeydown="handleChatInputKey(event)"></textarea>
+          <button id="chatSendBtn" class="chat-send-btn" onclick="sendChatMessage()" disabled>Send</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ============== LEADERBOARD PAGE ============== -->
+<div class="page" id="page-leaderboard">
+  <div class="leaderboard-wrap">
+    <div class="lb-header">
+      <button class="btn-back-home" onclick="history.length > 1 ? history.back() : showPage('home')" style="white-space:nowrap;">Back</button>
+      <div class="lb-title-block">
+        <div class="lb-eyebrow"> OTS Hall of Fame</div>
+        <h2 class="lb-title">Monthly <span class="hl">Leaderboard</span></h2>
+      </div>
+      <button class="lb-refresh" onclick="loadLeaderboard()" style="white-space:nowrap;">Refresh</button>
+    </div>
+    <div class="lb-search-wrap">
+      <input class="lb-search-bar" id="lbSearchInput" type="search" placeholder=" Search performer..." oninput="filterLeaderboard(this.value)">
+    </div>
+    <div id="leaderboardContent">
+      <div class="lb-empty">Loading rankings...</div>
+    </div>
+  </div>
+</div>
+
+<!-- CONGRATULATIONS OVERLAY -->
+<!-- Global avatar file input - accessible from leaderboard and profile page -->
+<input type="file" id="globalAvatarInput" accept="image/*" style="display:none;" onchange="handleAvatarUpload(this)">
+<input type="file" id="idProofInput" accept="image/*" style="display:none;" onchange="handleIdProofUpload(this)">
+
+<!-- WhatsApp-style profile photo viewer -->
+<div id="photoViewerOverlay" onclick="closePhotoViewer()">
+  <div class="pv-circle" id="pvCircle">
+    <img id="pvImg" src="" alt="" style="display:none;">
+    <span id="pvInitial"></span>
+  </div>
+  <div class="pv-name" id="pvName"></div>
+  <div class="pv-role" id="pvRole"></div>
+  <div class="pv-shows" id="pvShows"></div>
+  <div class="pv-close-hint">Tap anywhere to close</div>
+</div>
+
+<div class="congrats-overlay" id="congratsOverlay" style="display:none;" onclick="closeCongratsOverlay()">
+  <div class="congrats-box" onclick="event.stopPropagation()">
+    <span class="congrats-emoji"></span>
+    <div style="font-family:'Playfair Display',serif;font-size:1rem;color:var(--muted);margin-bottom:.2rem;">Congratulations!</div>
+    <div class="congrats-count" id="congratsCount">0</div>
+    <div class="congrats-label" id="congratsLabel">shows performed on the streets of Chennai!</div>
+    <div style="font-size:.8rem;color:var(--muted);margin-bottom:1.5rem;" id="congratsSub">Keep rocking - every show earns you a point </div>
+    <button class="congrats-close" onclick="closeCongratsOverlay()">Let's Go! </button>
+  </div>
+</div>
+
+<!-- ============== PROFILE SETTINGS PAGE ============== -->
+<div class="page" id="page-profile">
+  <div class="page-inner profile-centered-wrap" style="max-width:760px;margin:0 auto;padding:2rem 1.2rem 6rem;width:100%;">
+    <!-- header -->
+    <div style="display:flex;align-items:center;gap:.8rem;margin-bottom:1.6rem;">
+      <button onclick="showPage('myrequests')" style="background:none;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer;padding:.1rem .3rem;line-height:1;">Back</button>
+      <span class="section-label sl-orange" style="margin:0;">My Profile</span>
+      <button onclick="memberLogout()" style="margin-left:auto;background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);color:#ff7b7b;font-family:'DM Sans',sans-serif;font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:.5rem .75rem;border-radius:4px;cursor:pointer;">Sign Out</button>
+    </div>
+
+    <!-- Avatar + completion bar -->
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1.1rem;margin-bottom:2rem;">
+      <div class="prof-avatar-wrap">
+        <div class="prof-avatar-lg" id="profAvatarLg" onclick="document.getElementById('globalAvatarInput').click()" title="Tap to change photo">
+          <img id="profAvatarLgImg" src="" alt="" style="display:none;">
+          <span id="profAvatarLgInitial"></span>
+        </div>
+        <button class="prof-avatar-edit-btn" onclick="document.getElementById('globalAvatarInput').click()" title="Change photo"></button>
+      </div>
+      <div style="width:100%;max-width:340px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;">
+          <span style="font-size:.72rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);">Profile Completion</span>
+          <span id="profCompPct" style="font-size:.95rem;font-weight:800;color:var(--orange);">0%</span>
+        </div>
+        <div class="prof-comp-track">
+          <div class="prof-comp-fill" id="profCompFill" style="width:0%;"></div>
+        </div>
+        <div id="profCompHint" style="font-size:.68rem;color:var(--muted);margin-top:.35rem;text-align:right;min-height:1em;"></div>
+      </div>
+    </div>
+
+    <!-- BASIC INFO -->
+    <div class="prof-section">
+      <div class="prof-section-title">Basic Info</div>
+      <div class="prof-field">
+        <label class="prof-label">Name</label>
+        <input id="pf-name" class="prof-input" type="text" placeholder="Your display name" maxlength="60">
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">Email</label>
+        <input id="pf-email" class="prof-input" type="email" placeholder="your@email.com" maxlength="120">
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">Phone</label>
+        <input id="pf-phone" class="prof-input" type="text" disabled style="opacity:.45;cursor:not-allowed;">
+        <div style="font-size:.63rem;color:var(--muted);margin-top:.25rem;">Phone is linked to your account and cannot be changed.</div>
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">Address</label>
+        <textarea id="pf-address" class="prof-input prof-textarea" placeholder="Your full address" maxlength="220" rows="3"></textarea>
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">Community Zone</label>
+        <select id="pf-zone" class="prof-input" style="appearance:none;-webkit-appearance:none;cursor:pointer;">
+          <option value="">- Select your zone -</option>
+          <option value="Zone A">Zone A</option>
+          <option value="Zone B">Zone B</option>
+          <option value="Zone C">Zone C</option>
+        </select>
+        <div id="pf-zone-note" style="font-size:.66rem;color:var(--muted);margin-top:.35rem;">Choose your zone. Future zone changes need admin approval.</div>
+      </div>
+      <div class="prof-field" id="pf-zone-reason-wrap">
+        <label class="prof-label">Reason for zone change</label>
+        <textarea id="pf-zone-reason" class="prof-input prof-textarea" placeholder="If you are changing from one zone to another, tell the admin why." maxlength="180" rows="3"></textarea>
+      </div>
+    </div>
+
+    <!-- ABOUT YOUR MUSIC -->
+    <div class="prof-section">
+      <div class="prof-section-title">About Your Music</div>
+      <div class="prof-field">
+        <label class="prof-label">Bio / Tagline</label>
+        <textarea id="pf-bio" class="prof-input prof-textarea" placeholder="e.g. Singer-songwriter from Chennai..." maxlength="200" rows="3" oninput="_updateBioCount()"></textarea>
+        <div style="font-size:.63rem;color:var(--muted);text-align:right;margin-top:.2rem;"><span id="pf-bio-count">0</span>/200</div>
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">Performer Type</label>
+        <select id="pf-role" class="prof-input" onchange="updateProfileRoleFields()" style="appearance:none;-webkit-appearance:none;cursor:pointer;">
+          <option value="">- Select -</option>
+          <option value="singer">Singer</option>
+          <option value="instrumentalist">Instrumentalist</option>
+          <option value="singer_instrumentalist">Singer / Instrumentalist</option>
+          <option value="volunteer">Volunteer</option>
+        </select>
+      </div>
+      <div class="prof-field" id="pf-instrument-wrap">
+        <label class="prof-label">Instrument</label>
+        <input id="pf-instrument" class="prof-input" type="text" placeholder="e.g. Acoustic Guitar, Keyboard, Cajon..." maxlength="80">
+      </div>
+    </div>
+
+    <!-- PERSONAL DETAILS -->
+    <div class="prof-section">
+      <div class="prof-section-title">Personal Details</div>
+      <div class="prof-field">
+        <label class="prof-label">Blood Group</label>
+        <select id="pf-blood-group" class="prof-input" style="appearance:none;-webkit-appearance:none;cursor:pointer;">
+          <option value="">- Select -</option>
+          <option value="A+">A+</option>
+          <option value="A-">A</option>
+          <option value="B+">B+</option>
+          <option value="B-">B</option>
+          <option value="AB+">AB+</option>
+          <option value="AB-">AB</option>
+          <option value="O+">O+</option>
+          <option value="O-">O</option>
+        </select>
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">Birth Date & Month</label>
+        <input id="pf-dob" class="prof-input" type="text" inputmode="numeric" placeholder="DD-MM" maxlength="5">
+      </div>
+      <div class="prof-field">
+        <label class="prof-label">ID Proof Photo</label>
+        <div class="id-proof-upload-area" id="idProofUploadArea" onclick="document.getElementById('idProofInput').click()">
+          <div id="idProofEmpty" style="display:flex;flex-direction:column;align-items:center;gap:.3rem;">
+            <span style="font-size:1.5rem;"></span>
+            <span style="font-size:.82rem;color:var(--muted);font-weight:600;">Tap to upload ID proof</span>
+            <span style="font-size:.65rem;color:var(--muted);">Aadhaar, PAN, Passport, Driving Licence, etc.</span>
+          </div>
+          <div id="idProofPreview" style="display:none;width:100%;">
+            <div class="id-proof-thumb-wrap">
+              <img id="idProofThumb" src="" alt="ID Proof" class="id-proof-thumb">
+              <div>
+                <div style="font-size:.8rem;font-weight:600;color:var(--text);">ID uploaded </div>
+                <div style="font-size:.68rem;color:var(--muted);margin-top:.15rem;">Tap to replace</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="idProofStatus" style="font-size:.72rem;margin-top:.35rem;min-height:1.1em;text-align:center;"></div>
+        <div style="font-size:.63rem;color:var(--muted);margin-top:.15rem;">Visible only to OTS admins.</div>
+      </div>
+    </div>
+
+    <!-- SOCIAL -->
+    <div class="prof-section">
+      <div class="prof-section-title">Social</div>
+      <div class="prof-field">
+        <label class="prof-label">Instagram Handle</label>
+        <div style="display:flex;align-items:center;gap:.4rem;">
+          <span style="color:var(--muted);font-size:.95rem;flex-shrink:0;">@</span>
+          <input id="pf-instagram" class="prof-input" type="text" placeholder="yourhandle" maxlength="60" style="flex:1;">
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-cta-book" id="profSaveBtn" onclick="saveProfile()" style="width:100%;margin-top:.5rem;">Save Profile</button>
+    <div id="profSaveStatus" style="text-align:center;font-size:.78rem;margin-top:.75rem;min-height:1.3em;"></div>
+  </div>
+</div>
+
+<!-- ============== ADMIN PAGE ============== -->
+<div class="page" id="page-admin">
+  <div class="admin-wrap">
+    <div class="admin-header">
+      <div>
+        <h2 class="admin-title">Admin <span>Dashboard</span></h2>
+        <p class="admin-sub">Manage venues, approve requests - On The Streets</p>
+      </div>
+      <div style="display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;">
+        <div style="position:relative;">
+          <button id="adminNotifBellBtn" onclick="toggleAdminNotifPanel()" title="Pending approvals" style="background:transparent;border:1px solid var(--border);color:var(--text);font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:600;padding:.45rem .9rem;cursor:pointer;border-radius:3px;transition:all .2s;display:flex;align-items:center;gap:.4rem;"> Queue <span id="adminNotifCount" style="display:none;background:#ff4b4b;color:#fff;font-size:.6rem;font-weight:900;padding:.1rem .4rem;border-radius:999px;"></span></button>
+          <div id="adminNotifPanel" style="display:none;position:absolute;top:calc(100% + 6px);right:0;width:320px;max-height:400px;overflow-y:auto;background:rgba(13,11,26,.98);border:1px solid var(--border);border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.6);z-index:9900;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem 1rem;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(13,11,26,.99);">
+              <div style="font-size:.85rem;font-weight:800;"> Pending Approvals</div>
+              <button onclick="closeAdminNotifPanel()" style="background:transparent;border:none;color:var(--muted);font-size:1rem;cursor:pointer;padding:.1rem .35rem;border-radius:3px;">x</button>
+            </div>
+            <div id="adminNotifList"><div style="color:var(--muted);font-size:.8rem;text-align:center;padding:2rem;">Loading...</div></div>
+          </div>
+        </div>
+        <button class="export-btn" onclick="exportCSV()"> Export CSV</button>
+        <button onclick="openChangeCreds()" style="background:transparent;border:1px solid rgba(158,118,204,.4);color:var(--purple);font-family:'DM Sans',sans-serif;font-size:.72rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:.45rem 1rem;cursor:pointer;border-radius:3px;transition:all .2s;" onmouseover="this.style.background='rgba(158,118,204,.1)'" onmouseout="this.style.background='transparent'"> Change Password</button>
+      </div>
+    </div>
+
+    <!-- STAT CARDS -->
+    <div class="stat-cards">
+      <div class="stat-card sc-pink"><div class="sc-num" id="stat-confirmed">0</div><div class="sc-label">Confirmed This Week</div></div>
+      <div class="stat-card sc-blue"><div class="sc-num" id="stat-venues-count">0</div><div class="sc-label">Active Venues This Month</div></div>
+    </div>
+
+    <!-- NOTIFICATION SETUP BANNER -->
+    <div id="notif-setup-bar" style="display:none!important;background:rgba(240,119,30,.1);border:1px solid rgba(240,119,30,.3);border-radius:8px;padding:.8rem 1.1rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap;gap:.6rem;">
+      <span style="font-size:.82rem;color:var(--text);flex:1;min-width:180px;"> <strong>Enable notifications</strong> to get alerts for new bookings - even when you switch apps.</span>
+      <button id="notif-enable-btn" onclick="_enableNotifications()" style="background:linear-gradient(90deg,#f0771e,#9e76cc);color:#fff;border:none;border-radius:6px;padding:.45rem 1.1rem;font-size:.8rem;font-weight:700;cursor:pointer;white-space:nowrap;">Tap to Enable </button>
+      <button onclick="document.getElementById('notif-setup-bar').style.display='none'" style="background:transparent;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:0 .2rem;">x</button>
+    </div>
+    <div id="notif-ios-bar" style="display:none!important;background:rgba(158,118,204,.1);border:1px solid rgba(158,118,204,.3);border-radius:8px;padding:.8rem 1.1rem;margin-bottom:1rem;">
+      <div style="font-size:.82rem;color:var(--text);"> <strong>iPhone users:</strong> install the site first to use app-style notifications. Open Safari, tap Share, choose <strong>Add to Home Screen</strong>, then open OTS from the home screen.</div>
+      <button type="button" onclick="openInstallHelp()" style="margin-top:.65rem;background:rgba(112,186,244,.14);border:1px solid rgba(112,186,244,.32);color:var(--blue);font-family:'DM Sans',sans-serif;font-size:.75rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:.5rem .9rem;border-radius:6px;cursor:pointer;">Install Help</button>
+    </div>
+
+    <!-- ADMIN TABS -->
+    <div class="admin-tabs">
+      <button class="atab active" id="atab-venues" onclick="switchAdminTab('venues')"> Venue Manager</button>
+      <button class="atab" id="atab-import" onclick="switchAdminTab('import')"> Import CSV</button>
+      <button class="atab" id="atab-bookings" onclick="switchAdminTab('bookings')"> All Bookings</button>
+      <button class="atab" id="atab-claims" onclick="switchAdminTab('claims')"> Claims <span id="claimsBadge" style="display:none;background:#ffc83c;color:#1a1a1a;font-size:.6rem;font-weight:800;padding:.1rem .4rem;border-radius:10px;margin-left:.3rem;"></span></button>
+      <button class="atab" id="atab-photos" onclick="switchAdminTab('photos')"> Front Page Photos</button>
+      <button class="atab" id="atab-ads" onclick="switchAdminTab('ads')"> Community News</button>
+      <button class="atab" id="atab-members" onclick="switchAdminTab('members')"> Members</button>
+      <button class="atab" id="atab-points" onclick="switchAdminTab('points')"> Points</button>
+      <button class="atab" id="atab-reports" onclick="switchAdminTab('reports')"> Monthly Reports</button>
+      <button class="atab" id="atab-errors" onclick="switchAdminTab('errors')"> Error Reports</button>
+      <button class="atab" id="atab-settings" onclick="switchAdminTab('settings')"> Settings</button>
+      <button class="atab" id="atab-superadmin-btn" onclick="switchAdminTab('superadmin')" style="display:none;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border-color:transparent;"> Super Admin</button>
+    </div>
+
+    <!-- VENUES TAB -->
+    <div id="atab-content-venues">
+      <div class="venue-manager">
+        <div class="venue-manager-header">
+          <div>
+            <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;">Venue Manager</div>
+            <div style="font-size:.8rem;color:var(--muted);margin-top:.2rem;">Changes reflect instantly on the booking page</div>
+          </div>
+          <div style="display:flex;gap:.7rem;flex-wrap:wrap;">
+            <button id="clearAllVenuesBtn" class="export-btn" style="display:none;background:rgba(220,38,38,.12);border:1px solid rgba(220,38,38,.35);color:#ff6b6b;font-family:'DM Sans',sans-serif;font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.6rem 1.2rem;cursor:pointer;border-radius:3px;transition:all .2s;" onclick="openClearVenuesModal()"> Delete All Venues</button>
+            <button class="export-btn perm-venues-edit" style="background:rgba(255,184,77,.12);border:1px solid rgba(255,184,77,.32);color:#ffc978;font-family:'DM Sans',sans-serif;font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.6rem 1.2rem;cursor:pointer;border-radius:3px;transition:all .2s;" onclick="cleanupDuplicateVenues()"> Remove Duplicates</button>
+            <button class="export-btn perm-venues-edit" style="background:rgba(112,186,244,.15);border:1px solid rgba(112,186,244,.3);color:var(--blue);font-family:'DM Sans',sans-serif;font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.6rem 1.2rem;cursor:pointer;border-radius:3px;transition:all .2s;" onclick="switchAdminTab('import')"> Import CSV</button>
+            <button class="btn-add-venue perm-venues-edit" onclick="openVenueModal(null)">+ Add Venue</button>
+          </div>
+        </div>
+        <div class="venue-mgmt-grid" id="venueMgmtGrid"></div>
+      </div>
+    </div>
+
+    <!-- ERROR REPORTS TAB -->
+    <div id="atab-content-errors" style="display:none;">
+      <div class="admin-toolbar">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;">Error Reports</div>
+          <div style="font-size:.82rem;color:var(--muted);margin-top:.25rem;">Automatic technical reports from web app and Android app. Personal form details are not captured.</div>
+        </div>
+        <button class="filter-btn" onclick="loadClientErrorReports()">Refresh</button>
+        <button class="filter-btn" onclick="testClientErrorReporting()">Send Test</button>
+      </div>
+      <div id="clientErrorReportsList" class="error-report-list">
+        <div class="table-empty"><span class="emoji"></span>No error reports loaded</div>
+      </div>
+    </div>
+
+    <!-- IMPORT TAB -->
+    <div id="atab-content-import" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.4rem;">Import Venues from CSV</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:1.6rem;">Upload a CSV file to bulk-add venues. They'll appear instantly on the booking page.</div>
+
+      <div class="csv-format-hint">
+        <strong> Expected CSV Format</strong>
+        Columns (in order): <code>Day</code>, <code>Date</code>, <code>Show Slot</code>, <code>Event/Campaign</code>, <code>Venue</code>, optional <code>Venue Type</code><br>
+        Date: <code>1-Jan-2026</code> or <code>01/01/2026</code> &nbsp;-&nbsp; Slot: <code>6:30 - 7:30 PM</code> or <code>6:00 to 8:00 PM</code><br>
+        Venue Type options: <code>GCC</code>, <code>Metro</code>, <code>Foundation</code>, <code>Private</code>. Example: <code>Thursday, 1-Jan-2026, 6:30 - 7:30 PM, GCC, Rotticious, GCC</code>
+      </div>
+
+      <div class="csv-import-zone perm-venues-edit" id="csvDropZone">
+        <input type="file" accept=".csv,text/csv" id="csvFileInput" onchange="handleCSVFile(this.files[0])">
+        <span class="csv-zone-icon"></span>
+        <div class="csv-zone-text">
+          <strong>Click to upload or drag & drop</strong>
+          CSV files only - Max 500 rows
+        </div>
+      </div>
+
+      <div id="csvPreviewWrap" style="display:none;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.8rem;" id="csvPreviewTitle">Preview</div>
+        <div class="csv-preview">
+          <div class="csv-preview-head" style="grid-template-columns:60px 100px 140px 1fr 80px;">
+            <div>Day</div>
+            <div>Date</div>
+            <div>Show Slot</div>
+            <div>Venue</div>
+            <div>Status</div>
+          </div>
+          <div id="csvPreviewBody"></div>
+        </div>
+        <div class="csv-import-actions">
+          <div class="csv-import-summary" id="csvSummary"></div>
+          <button class="btn-secondary" style="padding:.65rem 1.2rem;" onclick="clearCSV()">x Clear</button>
+          <button class="btn-primary" id="csvImportBtn" style="padding:.65rem 1.4rem;max-width:200px;" onclick="importCSVVenues()"> Import Venues</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOOKINGS TAB -->
+    <div id="atab-content-bookings" style="display:none;">
+      <div class="admin-toolbar">
+        <input class="search-box" id="adminSearch" type="text" placeholder="  Search team, booker, venue, ID..." oninput="bookingPage=1;filterTable()">
+        <button class="filter-btn active" id="filter-all"       onclick="setFilter('all')">All</button>
+        <button class="filter-btn"        id="filter-pending"   onclick="setFilter('pending')">Pending</button>
+        <button class="filter-btn"        id="filter-confirmed" onclick="setFilter('confirmed')">Confirmed</button>
+        <button class="filter-btn"        id="filter-rejected"  onclick="setFilter('rejected')">Rejected</button>
+        <button class="filter-btn"        id="filter-needsProof" onclick="setFilter('needsProof')">Needs Proof / Point</button>
+        <button class="filter-btn perm-claims-edit" type="button" onclick="openAdminEmergencyCredit()">Emergency Show Credit</button>
+        <button class="filter-btn perm-claims-edit" type="button" onclick="openAdminEmergencyUpload()">Emergency Upload Access</button>
+      </div>
+      <div class="table-wrap">
+        <div class="tbl-head">
+          <div class="th">Team / Booker</div>
+          <div class="th">Date</div>
+          <div class="th">Type</div>
+          <div class="th">Time</div>
+          <div class="th">Status</div>
+          <div class="th">Proof</div>
+          <div class="th">Follow Up</div>
+          <div class="th">Actions</div>
+        </div>
+        <div class="tbl-body" id="adminTable">
+          <div class="table-empty"><span class="emoji"></span>No bookings yet.</div>
+        </div>
+      </div>
+      <div class="admin-pager" id="bookingPager"></div>
+    </div>
+
+    <!-- CLAIMS TAB -->
+    <div id="atab-content-claims" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.8rem;margin-bottom:1.4rem;">
+        <div>
+          <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;">Point Claims</div>
+          <div style="font-size:.82rem;color:var(--muted);margin-top:.2rem;">Review proof photos and approve or reject each member's show point.</div>
+        </div>
+        <button onclick="loadAdminClaims()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;font-weight:700;padding:.5rem 1rem;border-radius:3px;cursor:pointer;">Refresh</button>
+      </div>
+      <div id="adminClaimsList"><div class="table-empty"><span class="emoji"></span>No pending claims.</div></div>
+    </div>
+
+    <!-- PHOTOS TAB -->
+    <div id="atab-content-photos" style="display:none;">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:1.6rem;flex-wrap:wrap;gap:1rem;">
+        <div>
+          <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.3rem;">Front Page Photos</div>
+          <div style="font-size:.82rem;color:var(--muted);">Photos you upload here scroll across the home page automatically.</div>
+        </div>
+        <label class="btn-upload-photo perm-photos-edit" for="photoFileInput">
+          <span> Upload Photos</span>
+          <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none;" onchange="handlePhotoUpload(event)">
+        </label>
+      </div>
+
+      <!-- Drop zone -->
+      <div class="photo-drop-zone perm-photos-edit" id="photoDropZone" onclick="document.getElementById('photoFileInput').click()">
+        <div class="pdz-icon"></div>
+        <div class="pdz-title">Drop images here or click to upload</div>
+        <div class="pdz-sub">JPG, PNG, WEBP - multiple files OK - Max 5 MB each</div>
+      </div>
+
+      <!-- Photo grid -->
+      <div class="photo-mgmt-grid" id="photoMgmtGrid"></div>
+      <div id="photoEmptyState" style="text-align:center;padding:3rem 1rem;color:var(--muted);font-size:.88rem;font-style:italic;display:none;">No photos yet. Upload some above to fill the front page strip.</div>
+    </div>
+
+    <!-- COMMUNITY NEWS TAB -->
+    <div id="atab-content-ads" style="display:none;">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:1.3rem;flex-wrap:wrap;gap:1rem;">
+        <div>
+          <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.3rem;">Community News & Ads</div>
+          <div style="font-size:.82rem;color:var(--muted);">Share big events, chapter updates and announcements on the home page.</div>
+        </div>
+      </div>
+      <div class="community-ad-editor perm-ads-edit">
+        <input type="text" class="form-input" id="communityAdTitle" placeholder="Title, e.g. Big Jam Night">
+        <textarea class="form-input" id="communityAdMessage" rows="3" placeholder="Short announcement shown to members"></textarea>
+        <div class="community-ad-row">
+          <input type="url" class="form-input" id="communityAdLink" placeholder="Optional link">
+          <input type="text" class="form-input" id="communityAdCta" placeholder="Button text, e.g. View Details">
+        </div>
+        <div class="community-ad-image-tools">
+          <label class="community-ad-image-btn" for="communityAdImageInput">Upload Image</label>
+          <input type="file" id="communityAdImageInput" accept="image/*" style="display:none;" onchange="handleCommunityAdImageUpload(event)">
+          <button type="button" class="community-ad-image-remove" onclick="removeCommunityAdImage()">Remove Image</button>
+        </div>
+        <div class="community-ad-image-preview" id="communityAdImagePreview" style="display:none;"></div>
+        <div class="community-ad-actions">
+          <button type="button" class="btn-primary" onclick="saveCommunityAd()">Publish Update</button>
+          <button type="button" class="btn-secondary" onclick="clearCommunityAdForm()">Clear</button>
+        </div>
+        <div id="communityAdStatus" style="font-size:.78rem;color:var(--muted);margin-top:.6rem;"></div>
+      </div>
+      <div id="communityAdsAdminList" class="community-ad-admin-list">
+        <div class="table-empty">No community updates yet.</div>
+      </div>
+    </div>
+
+    <!-- MEMBERS TAB -->
+    <div id="atab-content-members" style="display:none;">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:1.6rem;flex-wrap:wrap;gap:1rem;">
+        <div>
+          <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.3rem;">Member Phone Numbers</div>
+          <div style="font-size:.82rem;color:var(--muted);">Only registered phone numbers can log in and submit booking requests via OTP.</div>
+        </div>
+        <button class="btn-add-venue" onclick="exportMembersCSV()" style="background:transparent;border:1px solid var(--border);color:var(--muted);font-size:.75rem;"> Export</button>
+      </div>
+
+      <!-- Manual add -->
+      <div class="perm-members-edit" style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.8rem;">Add Member</div>
+      <div class="manual-add-row perm-members-edit" style="flex-wrap:wrap;gap:.6rem;">
+        <input type="text" class="form-input" id="newMemberName" placeholder="Full name *" required style="max-width:200px;flex:1 1 160px;">
+        <input type="email" class="form-input" id="newMemberEmail" placeholder="Email address (optional)" style="flex:1 1 200px;" onkeydown="if(event.key==='Enter')addMemberManual()">
+        <input type="tel" class="form-input" id="newMemberPhone" placeholder="Mobile number *" required style="flex:1 1 180px;" onkeydown="if(event.key==='Enter')addMemberManual()">
+        <button class="btn-add-member" onclick="addMemberManual()"> Add</button>
+      </div>
+
+      <!-- Bulk CSV upload -->
+      <div class="perm-members-edit" style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.6rem;margin-top:.5rem;">Bulk Import via CSV</div>
+      <div class="csv-format-hint perm-members-edit" style="margin-bottom:1rem;">
+        <strong> CSV Format - All 3 fields required</strong>
+        <code>Name, Email, Phone</code><br>
+        e.g. <code>Ravi Kumar, <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="067467706f46616b676f6a2865696b">[email&#160;protected]</a>, +919876543210</code><br>
+        Header row is auto-detected and skipped. Every row must have Name, Email <em>and</em> Phone - rows missing any field are skipped.
+      </div>
+      <div class="member-phone-import-zone perm-members-edit" id="memberCsvZone">
+        <input type="file" accept=".csv,text/csv" id="memberCsvInput" onchange="handleMemberCSV(this.files[0])">
+        <span class="csv-zone-icon"></span>
+        <div class="csv-zone-text"><strong>Click to upload or drag & drop</strong>CSV only - Name, Email, Phone columns</div>
+      </div>
+
+      <!-- Zone filter -->
+      <div class="member-zone-tools">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.25rem;">Members by Zone</div>
+        <div class="member-zone-summary" id="memberZoneSummary">Select a zone to view only members in that zone.</div>
+        <div class="member-zone-filter" id="memberZoneFilter"></div>
+      </div>
+
+      <!-- Members table -->
+      <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.8rem;">Registered Members (<span id="memberCount">0</span>)</div>
+      <div class="admin-toolbar" style="margin-bottom:.8rem;">
+        <input class="search-box" id="memberSearch" type="text" placeholder="Search member name, email or phone..." oninput="memberPage=1;renderMembersTable()">
+      </div>
+      <div class="members-table-wrap">
+        <div class="members-tbl-head">
+          <div class="th">#</div>
+          <div class="th">Name</div>
+          <div class="th">Email</div>
+          <div class="th">Phone</div>
+          <div class="th">Added</div>
+          <div class="th">Actions</div>
+        </div>
+        <div class="members-tbl-body" id="membersTableBody">
+          <div class="table-empty"><span class="emoji"></span>No members yet. Add some above.</div>
+        </div>
+      </div>
+      <div class="admin-pager" id="memberPager"></div>
+    </div>
+
+    <!-- SETTINGS TAB -->
+    <!-- POINTS TAB -->
+    <div id="atab-content-points" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.3rem;"> Points Management</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:2rem;">Monthly zone reports, CSV point imports, volunteer bonus points and point corrections.</div>
+
+      <!-- Monthly Zone Reports -->
+      <div class="panel perm-points-edit" style="margin-bottom:1.8rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem;flex-wrap:wrap;gap:.5rem;">
+          <div>
+            <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;">Monthly Zone Reports</div>
+            <div style="font-size:.78rem;color:var(--muted);margin-top:.2rem;">Zone points reset month by month. Each approved point is saved with the member zone at that time.</div>
+          </div>
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+            <input type="month" class="form-input" id="zone-report-month" style="width:155px;margin-bottom:0;font-size:.78rem;padding:.45rem .65rem;">
+            <button onclick="loadZoneMonthlyReport()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;padding:.45rem .9rem;border-radius:3px;cursor:pointer;">Load</button>
+            <button onclick="saveZoneMonthlySnapshot()" style="background:var(--grad);border:none;color:#fff;font-family:'DM Sans',sans-serif;font-size:.75rem;font-weight:800;padding:.5rem .9rem;border-radius:3px;cursor:pointer;">Save Snapshot</button>
+          </div>
+        </div>
+        <div id="zoneMonthlyReport"><div style="color:var(--muted);font-size:.83rem;text-align:center;padding:2rem;">Choose a month and load the report.</div></div>
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin:1.2rem 0 .5rem;">Winning History</div>
+        <div id="zoneWinningHistory"><div style="color:var(--muted);font-size:.83rem;text-align:center;padding:1rem;">Saved monthly winners will appear here.</div></div>
+      </div>
+
+      <!-- Zone CSV Import -->
+      <div class="panel perm-points-edit" style="margin-bottom:1.8rem;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.3rem;">Import Zone Points CSV</div>
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:1rem;">CSV columns: <strong>name, phone, points, reason</strong>. Points are added to the member and locked to their current zone for the selected month.</div>
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:.75rem;">
+          <div style="min-width:155px;">
+            <label class="form-label">Report Month</label>
+            <input type="month" class="form-input" id="zone-csv-month" style="margin-bottom:0;">
+          </div>
+          <div style="flex:1;min-width:220px;">
+            <label class="form-label">CSV File</label>
+            <input type="file" class="form-input" id="zone-csv-file" accept=".csv,text/csv" onchange="handleZonePointsCsvFile(this.files && this.files[0])" style="margin-bottom:0;">
+          </div>
+        </div>
+        <textarea class="form-input" id="zone-csv-text" rows="5" placeholder="name,phone,points,reason&#10;Arjun,9876543210,3,Chapter lead credit"></textarea>
+        <div style="display:flex;gap:.75rem;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:.75rem;">
+          <div id="zone-csv-status" style="font-size:.78rem;color:var(--muted);"></div>
+          <button onclick="importZonePointsCsv()" style="background:var(--grad);color:#fff;border:none;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:800;padding:.65rem 1.2rem;border-radius:4px;cursor:pointer;">Import Points</button>
+        </div>
+      </div>
+
+      <!-- Give Volunteer Points -->
+      <div class="panel perm-points-edit" style="margin-bottom:1.8rem;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.3rem;">Give Volunteer Points</div>
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:1rem;">These count toward leaderboard total but do <strong>not</strong> count as a show. Use for volunteering, helping, organising, etc.</div>
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end;">
+          <div style="flex:1;min-width:140px;">
+            <label class="form-label">Member Phone</label>
+            <input type="text" class="form-input" id="vp-phone" placeholder="10-digit mobile number" style="margin-bottom:0;">
+          </div>
+          <div style="flex:2;min-width:160px;">
+            <label class="form-label">Reason</label>
+            <input type="text" class="form-input" id="vp-reason" placeholder="e.g. Helped with sound setup" style="margin-bottom:0;">
+          </div>
+          <div style="min-width:80px;">
+            <label class="form-label">Points</label>
+            <input type="number" class="form-input" id="vp-pts" value="1" min="1" max="10" style="margin-bottom:0;width:70px;">
+          </div>
+          <button onclick="giveVolunteerPoints()" style="background:var(--grad);color:#fff;border:none;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:700;padding:.65rem 1.4rem;border-radius:4px;cursor:pointer;white-space:nowrap;">+ Give Points</button>
+        </div>
+        <div id="vp-status" style="font-size:.78rem;margin-top:.6rem;"></div>
+      </div>
+
+      <!-- Approved Claims - Withdraw -->
+      <div class="panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem;flex-wrap:wrap;gap:.5rem;">
+          <div>
+            <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;">Withdraw Points</div>
+            <div style="font-size:.78rem;color:var(--muted);margin-top:.2rem;">Approved claims and volunteer points. Withdrawing removes the point from the leaderboard.</div>
+          </div>
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="withdraw-search" class="form-input" placeholder="Search by name or phone..." oninput="filterWithdrawList(this.value)" style="width:200px;margin-bottom:0;font-size:.78rem;padding:.45rem .75rem;">
+            <button onclick="loadWithdrawList()" style="background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--muted);font-family:'DM Sans',sans-serif;font-size:.75rem;padding:.45rem .9rem;border-radius:3px;cursor:pointer;">Refresh</button>
+          </div>
+        </div>
+        <div id="withdrawList"><div style="color:var(--muted);font-size:.83rem;text-align:center;padding:2rem;">Click Refresh to load approved points.</div></div>
+      </div>
+    </div>
+
+    <!-- MONTHLY REPORTS TAB -->
+    <div id="atab-content-reports" style="display:none;">
+      <div class="monthly-report-panel">
+        <div class="monthly-report-head">
+          <div>
+            <div class="monthly-report-kicker">Report Builder</div>
+            <div class="monthly-report-title">Monthly Reports</div>
+            <div class="monthly-report-sub">Create a GCC/Foundation style monthly report from confirmed show data, proof photos and footfall numbers.</div>
+          </div>
+          <div class="monthly-report-actions">
+            <button class="filter-btn" type="button" onclick="generateMonthlyReportPreview(true)">Refresh Preview</button>
+            <button class="btn-add-venue perm-reports-edit" type="button" onclick="exportMonthlyReportPDF()">Print / Save PDF</button>
+          </div>
+        </div>
+
+        <div class="monthly-report-controls">
+          <label>
+            <span>Month</span>
+            <input type="month" class="form-input" id="monthlyReportMonth" onchange="generateMonthlyReportPreview(true)">
+          </label>
+          <label>
+            <span>Report Type</span>
+            <select class="form-input" id="monthlyReportType" onchange="generateMonthlyReportPreview(true)">
+              <option value="all">All Shows</option>
+              <option value="gcc">GCC</option>
+              <option value="metro">Metro</option>
+              <option value="foundation">Foundation</option>
+              <option value="private">Private</option>
+            </select>
+          </label>
+          <label>
+            <span>Report Title</span>
+            <input type="text" class="form-input" id="monthlyReportTitle" placeholder="GCC REPORT JUN 2026" oninput="saveMonthlyReportTitleDraft()">
+          </label>
+        </div>
+
+        <div id="monthlyReportSummary" class="monthly-report-summary"></div>
+        <div id="monthlyReportWarnings" class="monthly-report-warnings"></div>
+        <div id="monthlyReportPreview" class="monthly-report-preview">
+          <div class="table-empty">Choose a month to preview report data.</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="atab-content-settings" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.4rem;">App Settings</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:2rem;">Configure options visible to members.</div>
+
+      <div class="panel" style="max-width:480px;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.4rem;">Admin Contact Number</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;">
+          Members see a " Contact Admin" button when their booking is within 2 days and cannot be cancelled online. Tapping it opens their phone dialer with this number.
+        </div>
+        <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;">
+          <input type="tel" class="form-input" id="settings-admin-phone" placeholder="+91 98765 43210" style="flex:1;min-width:200px;">
+          <button class="btn-add-venue" onclick="saveAdminPhone()" style="white-space:nowrap;"> Save</button>
+        </div>
+        <div id="settings-phone-status" style="font-size:.75rem;color:var(--muted);margin-top:.6rem;"></div>
+      </div>
+
+      <div class="panel" style="max-width:640px;margin-top:1.2rem;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.4rem;">Helpdesk Numbers</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.6;">
+          Add one number per line. These appear on the email registration help screen and are used as contact options when members have login or registration issues.
+        </div>
+        <textarea class="form-input" id="settings-helpdesk-numbers" rows="5" placeholder="+91 98765 43210&#10;+91 91234 56789" style="width:100%;resize:vertical;"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:.75rem;">
+          <button class="btn-add-venue" onclick="saveHelpdeskNumbers()" style="white-space:nowrap;"> Save Helpdesk</button>
+        </div>
+        <div id="settings-helpdesk-status" style="font-size:.75rem;color:var(--muted);margin-top:.6rem;"></div>
+      </div>
+
+      <div class="panel" style="max-width:640px;margin-top:1.2rem;">
+        <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;margin-bottom:.4rem;">Zone Names</div>
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.6;">
+          Add one zone name per line. Members will see these names in their profile, and admin can filter members by each zone.
+        </div>
+        <textarea class="form-input" id="settings-zone-names" rows="5" placeholder="Zone A&#10;Zone B&#10;Zone C" style="width:100%;resize:vertical;"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:.75rem;">
+          <button class="btn-add-venue" onclick="saveZoneNames()" style="white-space:nowrap;"> Save Zones</button>
+        </div>
+        <div id="settings-zone-status" style="font-size:.75rem;color:var(--muted);margin-top:.6rem;"></div>
+      </div>
+    </div>
+
+    <!-- SUPER ADMIN TAB -->
+    <div id="atab-content-superadmin" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.4rem;"> Super Admin</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:2rem;">Manage admin accounts and view activity logs.</div>
+
+      <!-- Admin Accounts Section -->
+      <div class="panel" style="margin-bottom:2rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+          <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;">Admin Accounts</div>
+          <button class="btn-add-venue" onclick="openCreateAdminModal()">+ Add Admin</button>
+        </div>
+        <div id="sa-admins-list"><div style="color:var(--muted);font-size:.85rem;">Loading...</div></div>
+      </div>
+
+      <!-- Activity Log Section -->
+      <div class="panel" style="margin-bottom:2rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+          <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;">Activity Log</div>
+          <button class="btn-secondary" onclick="loadSuperAdminData()" style="font-size:.75rem;padding:.3rem .7rem;"> Refresh</button>
+        </div>
+        <div id="sa-logs-list"><div style="color:var(--muted);font-size:.85rem;">Loading...</div></div>
+      </div>
+
+      <!--  DANGER ZONE -->
+      <div class="panel" style="border-color:rgba(220,38,38,.45);background:rgba(220,38,38,.04);">
+        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;">
+          <span style="font-size:1.1rem;"></span>
+          <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;color:#dc2626;">Danger Zone - New Season Reset</div>
+        </div>
+        <p style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.6;">This permanently deletes <strong style="color:#fff;">all bookings, all claims, the gallery, and activity logs</strong>. Venues, members, admin accounts and settings are kept. Use this only when starting a brand-new season.</p>
+        <button onclick="openResetModal()" style="background:#dc2626;color:#fff;border:none;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.6rem 1.4rem;border-radius:4px;cursor:pointer;transition:opacity .2s;" onmouseover="this.style.opacity='.82'" onmouseout="this.style.opacity='1'"> Reset Platform Data</button>
+      </div>
+
+      <div class="panel" style="border-color:rgba(220,38,38,.45);background:rgba(220,38,38,.035);margin-top:1rem;">
+        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;">
+          <span style="font-size:1.1rem;"></span>
+          <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;color:#ff6b6b;">Danger Zone - Clear Venue Test Data</div>
+        </div>
+        <p style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.6;">This permanently deletes <strong style="color:#fff;">all venue records</strong> from the live app. Members, admins, settings, photos, bookings and claims are kept.</p>
+        <button onclick="openClearVenuesModal()" style="background:#7f1d1d;color:#fff;border:none;font-family:'DM Sans',sans-serif;font-size:.8rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.6rem 1.4rem;border-radius:4px;cursor:pointer;transition:opacity .2s;" onmouseover="this.style.opacity='.82'" onmouseout="this.style.opacity='1'"> Delete All Venues</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- PLATFORM RESET MODAL -->
+<div class="modal-overlay" id="resetPlatformModal">
+  <div class="modal" style="max-width:420px;border-color:rgba(220,38,38,.5);">
+    <div style="text-align:center;margin-bottom:1rem;">
+      <div style="font-size:2.5rem;margin-bottom:.5rem;"></div>
+      <div class="modal-title" style="color:#dc2626;">New Season Reset</div>
+      <div class="modal-sub" style="line-height:1.7;">This will <strong>permanently delete</strong> all bookings, claims, gallery photos and activity logs.<br>Venues, members and admin accounts are kept.</div>
+    </div>
+    <div style="background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.3);border-radius:6px;padding:.9rem 1rem;margin-bottom:1.2rem;">
+      <div style="font-size:.75rem;color:#dc2626;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem;">What will be deleted</div>
+      <ul style="font-size:.8rem;color:var(--muted);line-height:2;margin:0;padding-left:1.1rem;">
+        <li>All slot booking requests</li>
+        <li>All performance claims &amp; points</li>
+        <li>All gallery photos</li>
+        <li>All admin activity logs</li>
+      </ul>
+    </div>
+    <div style="font-size:.8rem;color:var(--muted);margin-bottom:.5rem;">Type <strong style="color:#fff;letter-spacing:.05em;">RESET</strong> to confirm:</div>
+    <input type="text" class="form-input" id="resetConfirmInput" placeholder="Type RESET here" autocomplete="off" oninput="var ok=this.value==='RESET';var b=document.getElementById('resetSubmitBtn');b.disabled=!ok;b.style.opacity=ok?'1':'.5';" style="margin-bottom:1rem;font-size:1rem;letter-spacing:.08em;text-transform:uppercase;">
+    <div id="reset-err" style="display:none;color:#dc2626;font-size:.78rem;margin-bottom:.6rem;"></div>
+    <div style="display:flex;gap:.75rem;">
+      <button class="btn-secondary" onclick="closeResetModal()" style="flex:1;">Cancel</button>
+      <button id="resetSubmitBtn" disabled onclick="submitPlatformReset()" style="flex:2;background:#dc2626;color:#fff;border:none;font-family:'DM Sans',sans-serif;font-size:.82rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.7rem 1rem;border-radius:4px;cursor:pointer;opacity:.5;transition:opacity .2s;" onmouseover="if(!this.disabled)this.style.opacity='.82'" onmouseout="if(!this.disabled)this.style.opacity='1'"> Delete &amp; Reset Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- CLEAR ALL VENUES MODAL -->
+<div class="modal-overlay" id="clearVenuesModal">
+  <div class="modal" style="max-width:420px;border-color:rgba(220,38,38,.5);">
+    <div style="text-align:center;margin-bottom:1rem;">
+      <div style="font-size:2.5rem;margin-bottom:.5rem;"></div>
+      <div class="modal-title" style="color:#dc2626;">Delete All Venues</div>
+      <div class="modal-sub" style="line-height:1.7;">This will permanently delete every venue from the live app.<br>Use this before launch to remove tested venue data.</div>
+    </div>
+    <div style="background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.3);border-radius:6px;padding:.9rem 1rem;margin-bottom:1.2rem;">
+      <div style="font-size:.75rem;color:#dc2626;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem;">What will be deleted</div>
+      <ul style="font-size:.8rem;color:var(--muted);line-height:2;margin:0;padding-left:1.1rem;">
+        <li>All venues in Venue Manager</li>
+        <li>All venue dates, timings and images</li>
+      </ul>
+      <div style="font-size:.78rem;color:var(--muted);line-height:1.6;margin-top:.7rem;">Bookings, claims, members, admin accounts, settings and gallery photos are not deleted by this action.</div>
+    </div>
+    <div style="font-size:.8rem;color:var(--muted);margin-bottom:.5rem;">Type <strong style="color:#fff;letter-spacing:.05em;">DELETE VENUES</strong> to confirm:</div>
+    <input type="text" class="form-input" id="clearVenuesConfirmInput" placeholder="Type DELETE VENUES here" autocomplete="off" oninput="var ok=this.value==='DELETE VENUES';var b=document.getElementById('clearVenuesSubmitBtn');b.disabled=!ok;b.style.opacity=ok?'1':'.5';" style="margin-bottom:1rem;font-size:1rem;letter-spacing:.08em;text-transform:uppercase;">
+    <div id="clear-venues-err" style="display:none;color:#dc2626;font-size:.78rem;margin-bottom:.6rem;"></div>
+    <div style="display:flex;gap:.75rem;">
+      <button class="btn-secondary" onclick="closeClearVenuesModal()" style="flex:1;">Cancel</button>
+      <button id="clearVenuesSubmitBtn" disabled onclick="submitClearAllVenues()" style="flex:2;background:#dc2626;color:#fff;border:none;font-family:'DM Sans',sans-serif;font-size:.82rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:.7rem 1rem;border-radius:4px;cursor:pointer;opacity:.5;transition:opacity .2s;" onmouseover="if(!this.disabled)this.style.opacity='.82'" onmouseout="if(!this.disabled)this.style.opacity='1'"> Delete Venues Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE ADMIN MODAL -->
+<div class="modal-overlay" id="createAdminModal">
+  <div class="modal admin-access-dialog">
+    <button type="button" class="admin-modal-close" onclick="closeCreateAdminModal()" aria-label="Close add admin">&times;</button>
+    <div class="modal-title">Add Admin</div>
+    <div class="modal-sub">New admin can log in with these credentials.</div>
+    <div class="admin-access-fields">
+      <div class="form-group">
+        <label class="form-label">Username</label>
+        <input type="text" class="form-input" id="ca-username" placeholder="e.g. ravi" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" class="form-input" id="ca-password" placeholder="Min 4 characters" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Role</label>
+        <select class="form-input" id="ca-role" onchange="syncCreateAdminPermissionUi()">
+          <option value="admin">Admin</option>
+          <option value="superadmin">Super Admin</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" id="ca-permissions-wrap">
+      <label class="form-label">Allowed Edit Access</label>
+      <div id="ca-permissions-list"></div>
+      <div style="font-size:.72rem;color:var(--muted);line-height:1.5;margin-top:.4rem;">Admins can still view the dashboard. These options decide what they can change.</div>
+    </div>
+    <div id="ca-err" class="login-error" style="display:none;margin-bottom:.5rem;"></div>
+    <div class="admin-access-actions">
+      <button type="button" class="btn-secondary" onclick="closeCreateAdminModal()" style="flex:1;">Cancel</button>
+      <button type="button" class="btn-add-venue" id="ca-submit-btn" onclick="submitCreateAdmin()" style="flex:2;">Create Admin</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT ADMIN ACCESS MODAL -->
+<div class="modal-overlay" id="adminAccessModal">
+  <div class="modal admin-access-dialog">
+    <button type="button" class="admin-modal-close" onclick="closeAdminAccessModal()" aria-label="Close admin access">&times;</button>
+    <div class="modal-title">Admin Access</div>
+    <div class="modal-sub" id="aa-sub">Choose what this admin can edit.</div>
+    <input type="hidden" id="aa-id">
+    <input type="hidden" id="aa-username">
+    <div class="form-group" style="margin-top:1rem;">
+      <label class="form-label">Allowed Edit Access</label>
+      <div id="aa-permissions-list"></div>
+    </div>
+    <div id="aa-err" class="login-error" style="display:none;margin-bottom:.5rem;"></div>
+    <div class="admin-access-actions">
+      <button type="button" class="btn-secondary" onclick="closeAdminAccessModal()" style="flex:1;">Cancel</button>
+      <button type="button" class="btn-add-venue" id="aa-save-btn" onclick="saveAdminAccess()" style="flex:2;">Save Access</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast">
+  <div class="toast-icon" id="toast-icon"></div>
+  <div style="flex:1;"><div class="toast-title" id="toast-title"></div><div class="toast-msg" id="toast-msg"></div></div>
+  <div class="toast-bar"></div>
+</div>
+
+<!-- VENUE EDIT MODAL -->
+<div class="modal-overlay" id="venueModal">
+  <div class="modal modal-scroll">
+    <button class="admin-modal-close" type="button" onclick="closeVenueModal()" aria-label="Close venue editor">&times;</button>
+    <div class="modal-title" id="vm-title">Add Venue</div>
+    <div class="modal-sub" id="vm-sub">Fill in the details. Changes will reflect immediately on the booking page.</div>
+    <input type="hidden" id="vm-id">
+    <div class="form-group"><label class="form-label">Venue Name</label><input type="text" class="form-input" id="vm-name" placeholder="e.g. Corner Stage"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Day</label>
+        <select class="form-input" id="vm-day">
+          <option value="">Select day</option>
+          <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+          <option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Date</label><input type="date" class="form-input" id="vm-date"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Show Slot Start</label><input type="time" class="form-input" id="vm-time-start"></div>
+      <div class="form-group"><label class="form-label">Show Slot End</label><input type="time" class="form-input" id="vm-time-end"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Venue Type</label>
+      <select class="form-input" id="vm-venue-type">
+        <option value="">Select venue type</option>
+        <option value="GCC">GCC</option>
+        <option value="Metro">Metro</option>
+        <option value="Foundation">Foundation</option>
+        <option value="Private">Private</option>
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Specific Location / Landmark <span style="color:var(--muted);font-weight:400;">(optional)</span></label><input type="text" class="form-input" id="vm-landmark" placeholder="e.g. Near Gandhi Statue, Marina Beach"></div>
+    <div class="form-group"><label class="form-label">Google Maps Link <span style="color:var(--muted);font-weight:400;">(optional - exact pin)</span></label><input type="url" class="form-input" id="vm-map-url" placeholder="https://maps.google.com/?q=..."></div>
+    <div class="form-group"><label class="form-label">Venue Photo URL <span style="color:var(--muted);font-weight:400;">(optional - paste an image link)</span></label><input type="url" class="form-input" id="vm-image-url" placeholder="https://example.com/venue.jpg"></div>
+    <div id="vm-err" class="login-error" style="display:none;margin:.2rem 0 .8rem;"></div>
+    <div class="modal-actions sticky-actions">
+      <button type="button" class="btn-secondary" onclick="closeVenueModal()">Cancel</button>
+      <button type="button" class="btn-primary" id="vm-save-btn" onclick="saveVenue()">Save Venue</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<!-- -- PROOF UPLOAD MODAL -- -->
+<div class="modal-overlay" id="proofModal" onclick="if(event.target===this)closeProofModal()" ontouchmove="if(event.target===this)event.preventDefault()">
+  <div class="modal-box" style="max-height:92vh;overflow-y:auto;" onclick="event.stopPropagation()" ontouchmove="event.stopPropagation()">
+    <button class="modal-close" onclick="closeProofModal()" style="position:absolute;top:.9rem;right:1rem;background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:var(--muted);">x</button>
+    <div class="modal-title" style="font-size:1.1rem;"> Upload Photo</div>
+    <div id="proofModalVenue" style="font-size:.8rem;color:var(--blue);margin:.3rem 0 .8rem;"></div>
+    <p style="font-size:.78rem;color:var(--muted);line-height:1.6;margin-bottom:1rem;">Upload a photo from your performance. Once submitted it goes to admin for approval and the point is added to the leaderboard.</p>
+    <img id="proofPreview" style="display:none;width:100%;border-radius:8px;margin-bottom:.8rem;">
+    <!-- File input is hidden; the button below triggers it directly via .click() -->
+    <input type="file" id="proofFileInput" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;" onchange="previewProof(this)">
+    <button type="button" id="proofChooseBtn" class="proof-file-label" onclick="document.getElementById('proofFileInput').click()">
+       Choose Photo
+    </button>
+
+    <div id="proofManualTimeBox" style="display:none;margin-top:1rem;padding:1rem;border:1px solid rgba(245,200,66,.28);background:rgba(245,200,66,.06);border-radius:6px;">
+      <div style="font-size:.78rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#ffc83c;margin-bottom:.45rem;">Missed check-in?</div>
+      <p style="font-size:.72rem;color:var(--muted);line-height:1.45;margin-bottom:.75rem;">Enter your arrival time and actual show started time before submitting the photo.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;">
+        <label style="font-size:.68rem;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;">Arrival time
+          <input id="proofArrivalTime" type="time" style="margin-top:.3rem;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:.55rem;color:#fff;font-family:'DM Sans',sans-serif;">
+        </label>
+        <label style="font-size:.68rem;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;">Show started
+          <input id="proofShowStartTime" type="time" style="margin-top:.3rem;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:.55rem;color:#fff;font-family:'DM Sans',sans-serif;">
+        </label>
+      </div>
+    </div>
+
+    <!-- Band member sharing -->
+    <div style="margin-top:1.1rem;padding-top:1rem;border-top:1px solid var(--border);">
+      <div style="font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:.5rem;"> Who else performed? (optional)</div>
+      <p style="font-size:.72rem;color:var(--muted);line-height:1.5;margin-bottom:.6rem;">Add your band members' registered phone numbers so they also get a point when admin approves.</p>
+      <div style="display:flex;gap:.5rem;margin-bottom:.5rem;">
+        <input id="proofSharePhone" type="tel" placeholder="Member phone number" style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:.55rem .75rem;color:#fff;font-size:.8rem;font-family:'DM Sans',sans-serif;" oninput="this.value=this.value.replace(/[^0-9+]/g,'')">
+        <button type="button" onclick="addSharedMember()" style="background:rgba(112,186,244,.15);border:1px solid rgba(112,186,244,.3);color:var(--blue);font-family:'DM Sans',sans-serif;font-size:.78rem;font-weight:700;padding:.55rem .9rem;border-radius:4px;cursor:pointer;white-space:nowrap;">+ Add</button>
+      </div>
+      <div id="proofSharedList" style="display:flex;flex-direction:column;gap:.35rem;"></div>
+    </div>
+
+    <button type="button" class="proof-submit-btn" id="proofSubmitBtn" onclick="proofSubmitTap(event)" disabled style="margin-top:1rem;">Submit for Approval</button>
+    <div id="proofErr" style="color:#ff4b4b;font-size:.75rem;margin-top:.6rem;display:none;"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="editPerformersModal" onclick="if(event.target===this)closeEditPerformersModal()">
+  <div class="modal modal-scroll" style="max-width:460px;">
+    <button class="admin-modal-close" type="button" onclick="closeEditPerformersModal()" aria-label="Close performers editor">&times;</button>
+    <div class="modal-title">Edit Type / Members</div>
+    <div class="modal-sub">You can update the performance type and performers until the show end time.</div>
+    <label class="form-label">Performance Type</label>
+    <select class="form-input" id="edit-perf-type">
+      <option value="">Select type</option>
+      <option value="Solo">Solo</option>
+      <option value="2 Piece">2 Piece</option>
+      <option value="3 Piece">3 Piece</option>
+      <option value="4 Piece">4 Piece</option>
+    </select>
+    <label class="form-label">Add Member Mobile Number</label>
+    <div style="display:flex;gap:.5rem;margin-bottom:.8rem;">
+      <input id="edit-perf-phone" type="tel" class="form-input" placeholder="10-digit mobile number" style="margin-bottom:0;" oninput="this.value=this.value.replace(/[^0-9+]/g,'')">
+      <button type="button" onclick="addEditPerformer()" style="background:rgba(112,186,244,.15);border:1px solid rgba(112,186,244,.3);color:var(--blue);font-family:'DM Sans',sans-serif;font-size:.78rem;font-weight:700;padding:.55rem .9rem;border-radius:4px;cursor:pointer;white-space:nowrap;">+ Add</button>
+    </div>
+    <div id="edit-perf-list" style="display:flex;flex-direction:column;gap:.45rem;"></div>
+    <div id="edit-perf-status" style="font-size:.78rem;color:var(--muted);margin-top:.8rem;"></div>
+    <div class="modal-actions sticky-actions">
+      <button class="btn-cancel" type="button" onclick="closeEditPerformersModal()">Cancel</button>
+      <button class="btn-confirm" id="edit-perf-save" type="button" onclick="saveEditPerformers()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="adminBookingEditModal" onclick="if(event.target===this)closeAdminBookingEdit()">
+  <div class="modal admin-booking-edit-modal modal-scroll">
+    <button class="admin-modal-close" type="button" onclick="closeAdminBookingEdit()" aria-label="Close booking editor">&times;</button>
+    <div class="modal-title" id="abe-title">Edit Booking</div>
+    <div class="modal-sub" id="abe-sub">Use this for last-minute venue or team changes.</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Venue</label><select class="form-input" id="abe-venue" onchange="adminBookingVenueChanged()"></select></div>
+      <div class="form-group"><label class="form-label">Venue Name</label><input class="form-input" id="abe-venue-name" placeholder="Venue name"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Date</label><input class="form-input" id="abe-date" type="date"></div>
+      <div class="form-group"><label class="form-label">Slot Type</label><select class="form-input" id="abe-type"><option value="">Select</option><option>Solo</option><option>2 Piece</option><option>3 Piece</option><option>4 Piece</option><option>Group</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Team / Performer Name</label><input class="form-input" id="abe-team" placeholder="Team or performer"></div>
+      <div class="form-group"><label class="form-label">Booked By</label><input class="form-input" id="abe-booked-by" placeholder="Booking person"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Member Phone</label><input class="form-input" id="abe-phone" type="tel" placeholder="Registered phone"></div>
+      <div class="form-group"><label class="form-label">Member Email</label><input class="form-input" id="abe-email" type="email" placeholder="Registered email"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Status</label><select class="form-input" id="abe-status"><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option></select></div>
+    <div class="form-group"><label class="form-label">Admin Note</label><textarea class="form-input" id="abe-notes" rows="3" placeholder="Reason / sudden change note"></textarea></div>
+    <div class="modal-actions sticky-actions">
+      <button type="button" class="btn-secondary" onclick="closeAdminBookingEdit()">Cancel</button>
+      <button type="button" class="btn-primary" id="abe-save-btn" onclick="saveAdminBookingEdit()">Save Changes</button>
+    </div>
+    <div id="abe-err" class="login-error" style="display:none;margin-top:.8rem;"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal confirm-modal">
+    <span class="modal-icon"></span>
+    <div class="modal-title">Request Submitted!</div>
+    <div class="modal-sub">Your slot request is now pending admin approval. Check "My Requests" for live status updates.</div>
+    <div class="modal-detail" id="modal-detail"></div>
+    <div class="modal-id">Request ID: <strong id="modal-id"></strong></div>
+    <div class="modal-actions" style="justify-content:center;">
+      <button class="btn-primary" style="max-width:200px;" onclick="closeConfirmModal()">Got it!</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="installHelpModal" onclick="if(event.target===this)closeInstallHelp()">
+  <div class="modal install-help-modal modal-scroll">
+    <button class="install-help-close" type="button" onclick="closeInstallHelp()" aria-label="Close install help">x</button>
+    <div class="modal-title">Install OTS App</div>
+    <div class="modal-sub">Use the same live web app as a shortcut on phone or laptop. No App Store payment needed.</div>
+    <button class="btn-primary install-native-btn" id="installNativeBtn" type="button" onclick="triggerPwaInstall()" style="display:none;margin-bottom:1rem;">Install on this device</button>
+    <div class="install-help-grid">
+      <div class="install-help-card">
+        <strong>Android Chrome</strong>
+        <span>Open the website, tap the three dots, then tap Add to Home screen or Install app.</span>
+      </div>
+      <div class="install-help-card">
+        <strong>iPhone Safari</strong>
+        <span>Open the website in Safari, tap Share, then choose Add to Home Screen.</span>
+      </div>
+      <div class="install-help-card">
+        <strong>Laptop Chrome or Edge</strong>
+        <span>Open the website, click the install icon in the address bar, or use menu > Apps > Install this site.</span>
+      </div>
+    </div>
+    <div class="install-help-note" id="installHelpNote">After installing, open OTS from the icon and login normally.</div>
+  </div>
+</div>
+<script src="./ots-app-core.js"></script>
+
+<!-- APPROVAL NOTIFICATION BANNER -->
+<!-- =============== NOTIFICATION PANEL =============== -->
+<div id="notifOverlay" onclick="closeNotifPanel()"></div>
+<div id="notifPanel">
+  <div class="np-header">
+    <div class="np-title"> Notifications</div>
+    <div style="display:flex;align-items:center;gap:.6rem;">
+      <button class="np-clear" onclick="clearAllNotifs()">Clear all</button>
+      <button class="np-close" onclick="closeNotifPanel()">x</button>
+    </div>
+  </div>
+  <div id="notifPanelList"></div>
+</div>
+
+<div class="approval-notif" id="approvalNotif" role="alert" aria-live="assertive">
+  <div class="an-bar"></div>
+  <div class="an-header">
+    <span class="an-icon" id="an-icon"></span>
+    <span class="an-title" id="an-title">Slot Approved!</span>
+    <button class="an-close" onclick="dismissApprovalNotif()" aria-label="Dismiss">x</button>
+  </div>
+  <div class="an-body" id="an-body">Your slot request has been approved.</div>
+  <div class="an-detail" id="an-detail"></div>
+  <div class="an-progress"><div class="an-progress-fill" id="an-progress-fill" style="width:100%"></div></div>
+</div>
+
+<!-- MEMBER LOGIN -->
+<div id="memberLoginPage">
+  <div class="mlbox">
+    <img src="./ots-login-logo.png" decoding="async" alt="On The Streets of Chennai" id="mlLogo" style="width:160px;display:block;margin:0 auto 1.2rem auto;cursor:pointer;user-select:none;" onclick="handleLogoClick()">
+      <div style="font-size:.75rem;color:rgba(244,240,255,.4);margin-bottom:1.6rem;text-align:center;">Member Login</div>
+
+    <!-- Step 1: email -->
+    <div id="mlStep1">
+      <div style="font-family:'Playfair Display',serif;font-size:1.4rem;font-weight:900;margin-bottom:.8rem;">Welcome </div>
+      <div class="google-signin-wrap" id="googleSignInWrap">
+        <div id="googleSignInButton"></div>
+      </div>
+      <div class="google-signin-note" id="googleSignInNote">Sign in faster with the Google email saved in member data.</div>
+      <div class="ml-auth-divider" id="mlAuthDivider" style="display:none;">or email otp</div>
+      <label style="display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;color:rgba(244,240,255,.45);margin-bottom:.5rem;">Email Address</label>
+      <input id="mlPhone" type="email" placeholder="Enter your registered email" class="ml-input"
+        autocomplete="email" inputmode="email">
+      <button class="ml-btn" id="mlSendBtn" onclick="mlSend()">Send OTP </button>
+      <div id="mlTimerText"></div>
+      <button type="button" class="ml-link-btn" onclick="mlOpenRegisterEmail()">Register your email ID</button>
+      <button type="button" class="ml-install-btn" onclick="openInstallHelp()">Install app shortcut</button>
+      <div class="ml-reg-panel" style="margin-top:1rem;">
+        <div class="ml-reg-title">Need Help?</div>
+        <div class="ml-reg-hint">Having trouble logging in? Contact admin for help.</div>
+        <div class="ml-helpdesk-list" data-helpdesk-list></div>
+      </div>
+    </div>
+
+    <!-- Step 2: email otp -->
+    <div id="mlStep2" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.4rem;font-weight:900;margin-bottom:.5rem;">Enter OTP</div>
+      <p style="font-size:.82rem;color:rgba(244,240,255,.45);margin-bottom:.8rem;">OTP sent to <strong id="mlSentTo" style="color:#70BAF4;"></strong></p>
+      <input id="mlOtpInput" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Enter 6-digit OTP" class="ml-input"
+        oninput="mlOtpChanged()" style="text-align:center;font-size:1.3rem;letter-spacing:.2em;">
+      <button class="ml-btn" id="mlVerifyBtn" type="button" ontouchstart="return mlVerifyTap(event)" onmousedown="return mlVerifyTap(event)" onpointerdown="return mlVerifyTap(event)" onclick="return mlVerifyTap(event)">Continue</button>
+      <div id="mlTimerTextStep2"></div>
+      <div style="text-align:center;margin-top:.8rem;display:flex;justify-content:center;gap:1rem;flex-wrap:wrap;">
+        <button id="mlResendBtn" onclick="mlSend(true)" disabled>Resend OTP</button>
+        <button onclick="mlBack()" style="background:none;border:none;color:rgba(244,240,255,.4);font-size:.8rem;cursor:pointer;text-decoration:underline;">Back Change email</button>
+      </div>
+    </div>
+
+    <!-- Step 3: register email -->
+    <div id="mlStepRegister" style="display:none;">
+      <div style="font-family:'Playfair Display',serif;font-size:1.4rem;font-weight:900;margin-bottom:.5rem;">Register your email ID</div>
+      <input id="mlRegPhone" type="tel" placeholder="Registered mobile number" class="ml-input" autocomplete="tel" inputmode="tel">
+      <input id="mlRegEmail" type="email" placeholder="Email ID" class="ml-input" autocomplete="email" inputmode="email">
+      <button class="ml-btn" id="mlRegBtn" type="button" onclick="mlRegisterEmail()">Save Email</button>
+      <button type="button" class="ml-link-btn" onclick="mlBackToEmailLogin()">Back to Login</button>
+      <div class="ml-reg-status" id="mlRegStatus"></div>
+      <div class="ml-reg-panel" style="margin-top:1rem;">
+        <div class="ml-reg-title">Need Help?</div>
+        <div class="ml-reg-hint">Having trouble registering your email? Contact admin for help.</div>
+        <div class="ml-helpdesk-list" data-helpdesk-list></div>
+      </div>
+    </div>
+
+    <div class="ml-err" id="mlErr"></div>
+  </div>
+</div>
+
+<!-- ADMIN LOGIN -->
+<div class="login-page" id="loginPage">
+  <div class="login-box">
+    <img src="./ots-login-logo.png" decoding="async" alt="On The Streets of Chennai" style="width:140px;display:block;margin:0 auto 0.5rem auto;">
+    <div class="login-sub" style="text-align:center;">Admin Access Portal</div>
+    <div class="login-title">Welcome back </div>
+    <p style="font-size:.82rem;color:var(--muted);margin-bottom:1.6rem;line-height:1.6;">Sign in with your admin credentials to manage venues, approve bookings and more.</p>
+    <button onclick="document.getElementById('loginPage').classList.remove('show')" title="Close" style="position:absolute;top:.8rem;right:.8rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.6);width:2rem;height:2rem;border-radius:50%;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;transition:background .2s;" onmouseover="this.style.background='rgba(255,255,255,.15)'" onmouseout="this.style.background='rgba(255,255,255,.08)'">x</button>
+    <div class="login-err" id="loginErr">Incorrect username or password. Please try again.</div>
+    <div class="input-wrap">
+      <label class="form-label">Username</label>
+      <input type="text" class="form-input" id="loginUser" placeholder="Enter your username" autocomplete="username">
+    </div>
+    <div class="input-wrap">
+      <label class="form-label">Password</label>
+      <input type="password" class="form-input" id="loginPass" placeholder="Enter your password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="toggle-pw" onclick="togglePw()" tabindex="-1" id="pwToggleBtn"></button>
+    </div>
+    <button class="btn-login" id="adminLoginBtn" onclick="doLogin()">Access Admin Panel</button>
+  </div>
+</div>
+
+<!-- CHANGE CREDENTIALS MODAL -->
+<div class="creds-overlay" id="credsOverlay" onclick="if(event.target===this)closeChangeCreds()">
+  <div class="creds-box">
+    <button class="btn-close-creds" onclick="closeChangeCreds()">x</button>
+    <span class="creds-lock"></span>
+    <div class="creds-title">Change Credentials</div>
+    <div class="creds-sub">Update your admin username and password. You'll need your current password to confirm.</div>
+
+    <div class="creds-err" id="credsErr"></div>
+    <div class="creds-success" id="credsSuccess"> Credentials saved successfully!</div>
+
+    <div class="creds-section-label">Current Password</div>
+    <div class="input-wrap" style="margin-bottom:0;">
+      <input type="password" class="form-input" id="currentPassCheck" placeholder="Enter your current password">
+    </div>
+
+    <div class="creds-divider"></div>
+
+    <div class="creds-section-label">New Username</div>
+    <div class="input-wrap" style="margin-bottom:.9rem;">
+      <input type="text" class="form-input" id="newUser" placeholder="New username" autocomplete="off">
+    </div>
+
+    <div class="creds-section-label" style="margin-top:0;">New Password</div>
+    <div class="input-wrap" style="margin-bottom:.9rem;">
+      <input type="password" class="form-input" id="newPass" placeholder="New password (min 4 chars)" autocomplete="new-password">
+    </div>
+
+    <div class="creds-section-label" style="margin-top:0;">Confirm New Password</div>
+    <div class="input-wrap" style="margin-bottom:0;">
+      <input type="password" class="form-input" id="confirmPass" placeholder="Repeat new password" autocomplete="new-password" onkeydown="if(event.key==='Enter')saveNewCreds()">
+    </div>
+
+    <button class="btn-save-creds" onclick="saveNewCreds()">Save New Credentials </button>
+  </div>
+</div>
+
+<!-- =============== MOBILE BOTTOM NAV =============== -->
+<nav id="mobile-nav">
+  <button class="mn-item active" id="mn-home" onclick="showPage('home')">
+    <span class="mn-icon">&#127968;</span>
+    <span class="mn-label">Home</span>
+  </button>
+  <button class="mn-item" id="mn-venues" onclick="showPage('venues')">
+    <span class="mn-icon">&#128197;</span>
+    <span class="mn-label">Venues</span>
+  </button>
+  <button class="mn-item" id="mn-book" onclick="showPage('form')" style="display:none;">
+    <span class="mn-icon">&#127928;</span>
+    <span class="mn-label">Book</span>
+  </button>
+  <button class="mn-item" id="mn-requests" onclick="showPage('myrequests')" style="display:none;">
+    <span class="mn-icon">&#128203;</span>
+    <span class="mn-label">Requests</span>
+    <span class="mn-dot" id="mn-dot" style="display:none;"></span>
+  </button>
+  <button class="mn-item" id="mn-chat" onclick="showPage('chat')" style="display:none;">
+    <span class="mn-icon">&#128172;</span>
+    <span class="mn-label">Chat</span>
+    <span class="mn-dot" id="mn-chat-dot" style="display:none;"></span>
+  </button>
+  <button class="mn-item" id="mn-leaderboard" onclick="showPage('leaderboard')">
+    <span class="mn-icon">&#127942;</span>
+    <span class="mn-label">Rankings</span>
+  </button>
+  <button class="mn-item" id="mn-notif" onclick="openNotifPanel()" style="display:none;">
+    <span class="mn-icon">&#128276;</span>
+    <span class="mn-label">Alerts</span>
+    <span id="mn-notif-dot"></span>
+  </button>
+</nav>
+
+<script src="./ots-boot.js"></script>
+
+<script src="./ots-mobile-scroll.js"></script>
+
+
+<div class="modal-overlay" id="memberProfileAdminModal">
+  <div class="modal" style="max-width:760px;">
+    <div class="modal-title">Member Profile</div>
+    <div class="modal-sub">View, edit profile details, and approve zone requests.</div>
+    <div id="memberAdminStatus" style="font-size:.78rem;margin-bottom:1rem;min-height:1.2em;color:var(--muted);"></div>
+    <div class="member-admin-grid">
+      <div class="member-admin-field"><label class="member-admin-label">Name</label><input id="ma-name" class="member-admin-input" type="text"></div>
+      <div class="member-admin-field"><label class="member-admin-label">Phone</label><input id="ma-phone" class="member-admin-input" type="text" disabled></div>
+      <div class="member-admin-field"><label class="member-admin-label">Email</label><input id="ma-email" class="member-admin-input" type="text"></div>
+      <div class="member-admin-field"><label class="member-admin-label">Address</label><textarea id="ma-address" class="member-admin-textarea" style="min-height:60px;"></textarea></div>
+      <div class="member-admin-field"><label class="member-admin-label">Instrument / Role</label><input id="ma-instrument" class="member-admin-input" type="text"></div>
+      <div class="member-admin-field"><label class="member-admin-label">Instagram</label><input id="ma-instagram" class="member-admin-input" type="text"></div>
+      <div class="member-admin-field"><label class="member-admin-label">Blood Group</label><input id="ma-blood-group" class="member-admin-input" type="text"></div>
+      <div class="member-admin-field"><label class="member-admin-label">Birth Date & Month</label><input id="ma-dob" class="member-admin-input" type="text" inputmode="numeric" placeholder="DD-MM" maxlength="5"></div>
+    </div>
+    <div class="member-admin-field"><label class="member-admin-label">Bio</label><textarea id="ma-bio" class="member-admin-textarea"></textarea></div>
+    <div class="member-admin-grid">
+      <div class="member-admin-field"><label class="member-admin-label">Current Zone</label><select id="ma-zone-current" class="member-admin-select"><option value="">- None -</option><option value="Zone A">Zone A</option><option value="Zone B">Zone B</option><option value="Zone C">Zone C</option></select></div>
+      <div class="member-admin-field"><label class="member-admin-label">Pending Zone Request</label><input id="ma-zone-request" class="member-admin-input" type="text" disabled></div>
+    </div>
+    <div class="member-admin-field"><label class="member-admin-label">Zone Change Reason</label><textarea id="ma-zone-reason" class="member-admin-textarea" style="min-height:70px;" disabled></textarea></div>
+    <div class="member-admin-field"><span id="ma-zone-status" class="member-admin-badge">No pending request</span></div>
+    <div class="member-admin-zone-box" id="ma-zone-box">
+      <div class="member-admin-zone-line"><strong>Requested zone</strong><span id="ma-zone-request-view">-</span></div>
+      <div class="member-admin-zone-line"><strong>Reason</strong><span id="ma-zone-reason-view">-</span></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeMemberProfileAdmin()">Close</button>
+      <button class="btn-secondary" id="ma-approve-btn" onclick="approveMemberZone(_memberAdminCurrentId)" style="display:none;">Approve Zone</button>
+      <button class="btn-primary" id="ma-save-btn" onclick="saveMemberProfileAdmin()" style="display:none;">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
