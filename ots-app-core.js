@@ -4478,6 +4478,7 @@ function refreshAdmin(attempt) {
   setAdminLoadingState(true, attempt ? 'Retrying live admin data...' : 'Loading live admin data...');
   var tab = currentAdminTab || 'venues';
   if (tab === 'approvals') tab = 'venues';
+  var reportMonthKey = tab === 'reports' ? getMonthlyReportMonthKeyForLoad() : '';
   var loadVenues = ['venues','import','bookings','reports','superadmin'].indexOf(tab) > -1;
   var loadBookings = ['venues','bookings','claims','points','reports','superadmin'].indexOf(tab) > -1;
   if (tab === 'members') loadMembers().catch(function(){});
@@ -4485,7 +4486,18 @@ function refreshAdmin(attempt) {
 
   var tasks = [];
   if (loadVenues) tasks.push({ key:'venues', promise:neonSQL('SELECT id,name,day,date,time_start,time_end,confirm_status,visibility,status,venue_type,landmark,map_url,image_url FROM venues ORDER BY date ASC, time_start ASC') });
-  if (loadBookings) tasks.push({ key:'bookings', promise:neonSQL('SELECT id,venue_id,venue,date,type,name,booked_by,phone,email,notes,visibility,status,created_at,' + LIGHT_PROOF_SQL + ',proof_claimed,checkin_at,checkin_lat,checkin_lng,checkin_accuracy,checkin_map_url,performers FROM bookings ORDER BY created_at DESC LIMIT 1000') });
+  if (loadBookings) {
+    var bookingCols = 'id,venue_id,venue,date,type,name,booked_by,phone,email,notes,visibility,status,created_at,' + LIGHT_PROOF_SQL + ',proof_claimed,checkin_at,checkin_lat,checkin_lng,checkin_accuracy,checkin_map_url,performers';
+    if (tab === 'reports' && reportMonthKey) {
+      tasks.push({
+        key:'reportBookings',
+        monthKey:reportMonthKey,
+        promise:neonSQL('SELECT ' + bookingCols + ' FROM bookings WHERE LEFT(date::TEXT, 7)=$1 ORDER BY date ASC, created_at DESC LIMIT 5000', [reportMonthKey])
+      });
+    } else {
+      tasks.push({ key:'bookings', promise:neonSQL('SELECT ' + bookingCols + ' FROM bookings ORDER BY created_at DESC LIMIT 1000') });
+    }
+  }
   if (!tasks.length) {
     setAdminLoadingState(false);
     _refreshAdminUI();
@@ -4497,7 +4509,8 @@ function refreshAdmin(attempt) {
     var gotAnyLiveData = false;
     var needsRetry = false;
     results.forEach(function(result, i) {
-      var key = tasks[i].key;
+      var task = tasks[i];
+      var key = task.key;
       if (result.status === 'fulfilled') {
         if (key === 'venues') {
           var mappedVenues = mapVenueRows(result.value || []);
@@ -4515,10 +4528,20 @@ function refreshAdmin(attempt) {
             allBookings = mappedBookings;
           }
         }
+        if (key === 'reportBookings') {
+          var mappedReportBookings = mapBookingRows(result.value || []);
+          if (!mappedReportBookings.length && attempt < 2) {
+            needsRetry = true;
+          } else {
+            mergeMonthlyReportBookings(mappedReportBookings, task.monthKey);
+            _monthlyReportLoadedMonthKey = task.monthKey || '';
+          }
+        }
         gotAnyLiveData = true;
       } else {
         console.warn('[OTS] admin ' + key + ' load failed:', result.reason && (result.reason.message || result.reason));
         if ((key === 'venues' && !venues.length) || (key === 'bookings' && !allBookings.length)) needsRetry = true;
+        if (key === 'reportBookings') needsRetry = true;
       }
     });
     if (gotAnyLiveData) {
@@ -4528,6 +4551,9 @@ function refreshAdmin(attempt) {
         _refreshAdminUI();
         _adminRetryTimer = setTimeout(function(){ refreshAdmin(attempt + 1); }, 1200 + (attempt * 1200));
       } else {
+        if (currentAdminTab === 'reports' && needsRetry && reportMonthKey) {
+          _monthlyReportLoadFailedMonthKey = reportMonthKey;
+        }
         setAdminLoadingState(false);
         _refreshAdminUI();
         showSyncStatus(' Admin data updated','var(--green)');
@@ -4541,6 +4567,9 @@ function refreshAdmin(attempt) {
     if (attempt < 3) {
       _adminRetryTimer = setTimeout(function(){ refreshAdmin(attempt + 1); }, 1200 + (attempt * 1200));
     } else {
+      if (currentAdminTab === 'reports' && reportMonthKey) {
+        _monthlyReportLoadFailedMonthKey = reportMonthKey;
+      }
       setAdminLoadingState(false);
       _refreshAdminUI();
       showSyncStatus(' Could not refresh admin data','var(--orange)');
@@ -6707,10 +6736,32 @@ function adminCancel(id) {
 const MONTHLY_REPORT_DRAFT_KEY = 'ots_monthly_report_draft_v1';
 var _monthlyReportRows = [];
 var _monthlyReportLastContextKey = '';
+var _monthlyReportLoadedMonthKey = '';
+var _monthlyReportLoadFailedMonthKey = '';
+var _monthlyReportRefreshPromise = null;
 
 function monthlyReportContextKey(ctx) {
   ctx = ctx || getMonthlyReportContext();
   return String(ctx.monthKey || '') + '|' + String(ctx.type || 'all');
+}
+
+function getMonthlyReportMonthKeyForLoad() {
+  var el = document.getElementById('monthlyReportMonth');
+  var val = el && el.value ? String(el.value) : localMonthKey();
+  return /^\d{4}-\d{2}$/.test(val) ? val : localMonthKey();
+}
+
+function bookingBelongsToMonth(booking, monthKey) {
+  var date = normalizeVenueDate(booking && booking.date);
+  return !!(date && date.slice(0, 7) === monthKey);
+}
+
+function mergeMonthlyReportBookings(mappedBookings, monthKey) {
+  if (!monthKey) return;
+  allBookings = (allBookings || []).filter(function(b) {
+    return !bookingBelongsToMonth(b, monthKey);
+  }).concat(mappedBookings || []);
+  _monthlyReportLoadFailedMonthKey = '';
 }
 
 function localMonthKey(date) {
@@ -6995,13 +7046,30 @@ function generateMonthlyReportPreview(allowRefresh) {
     }
     return;
   }
+  if (adminLoggedIn && currentAdminTab === 'reports' && _monthlyReportLoadedMonthKey !== initialCtx.monthKey && _monthlyReportLoadFailedMonthKey !== initialCtx.monthKey) {
+    if (_monthlyReportRows.length && _monthlyReportLastContextKey === contextKey) {
+      showMonthlyReportRefreshingNotice('Loading full ' + monthLabelFromKey(initialCtx.monthKey, false) + ' report data...');
+    } else {
+      renderMonthlyReportLoading('Loading full ' + monthLabelFromKey(initialCtx.monthKey, false) + ' report data...');
+    }
+    if (!_monthlyReportRefreshPromise) {
+      _monthlyReportRefreshPromise = refreshAdmin()
+        .then(function(){ generateMonthlyReportPreview(false); })
+        .catch(function(){ generateMonthlyReportPreview(false); })
+        .finally(function(){ _monthlyReportRefreshPromise = null; });
+    }
+    return;
+  }
   if (allowRefresh && adminLoggedIn && currentAdminTab === 'reports' && !_adminDataLoading) {
     if (_monthlyReportRows.length && _monthlyReportLastContextKey === contextKey) {
       showMonthlyReportRefreshingNotice('Refreshing live report data...');
     } else {
       renderMonthlyReportLoading('Loading report data...');
     }
-    refreshAdmin().then(function(){ generateMonthlyReportPreview(false); }).catch(function(){ generateMonthlyReportPreview(false); });
+    _monthlyReportRefreshPromise = refreshAdmin()
+      .then(function(){ generateMonthlyReportPreview(false); })
+      .catch(function(){ generateMonthlyReportPreview(false); })
+      .finally(function(){ _monthlyReportRefreshPromise = null; });
     return;
   }
   var ctx = initialCtx;
