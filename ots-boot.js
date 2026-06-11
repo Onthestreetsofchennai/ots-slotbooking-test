@@ -84,13 +84,14 @@ function restoreVisiblePage() {
 
     if (mlp) mlp.classList.add('hidden');
 
+    const hashPage = (typeof otsPublicPageFromHash === 'function') ? otsPublicPageFromHash() : '';
     const savedPage = localStorage.getItem('ots_current_page');
     const safePage = ['home', 'venues', 'form', 'myrequests', 'leaderboard', 'profile'].includes(savedPage)
       ? savedPage
       : 'home';
 
     if (typeof showPage === 'function') {
-      showPage(safePage);
+      showPage(hashPage || safePage);
     }
   } catch (e) {
     if (typeof showPage === 'function') {
@@ -155,11 +156,13 @@ function forceImmediateBootPage() {
     // If member session is already known from pre-render flag, show home instantly
     if (document.documentElement.hasAttribute('data-member-active')) {
       if (mlp) mlp.classList.add('hidden');
+      var hashPage = (typeof otsPublicPageFromHash === 'function') ? otsPublicPageFromHash() : '';
       var savedPage = '';
       try { savedPage = localStorage.getItem('ots_current_page') || ''; } catch(e) {}
       var safePage = ['home','venues','form','myrequests','leaderboard','profile'].indexOf(savedPage) > -1
         ? savedPage
         : 'home';
+      safePage = hashPage || safePage;
       var targetPage = document.getElementById('page-' + safePage);
       if (targetPage && !hasActive) targetPage.classList.add('active');
       refreshTopNavSoon();

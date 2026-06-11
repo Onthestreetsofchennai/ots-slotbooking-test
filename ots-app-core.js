@@ -73,6 +73,10 @@ function otsIsAdminApp() { return otsAppMode() === 'admin'; }
 function otsIsMemberApp() { return otsAppMode() !== 'admin'; }
 function otsAdminEntry() { return window.OTS_ADMIN_ENTRY || './admin.html'; }
 function otsMemberEntry() { return window.OTS_MEMBER_ENTRY || './index.html'; }
+function otsPublicPageFromHash() {
+  var page = String((window.location.hash || '').replace(/^#/, '') || '').trim().toLowerCase();
+  return ['home','venues','form','myrequests','leaderboard','profile','chat'].indexOf(page) > -1 ? page : '';
+}
 function openAdminEntry(hash) {
   var target = otsAdminEntry() + (hash || '#admin');
   if (otsIsAdminApp()) {
@@ -80,6 +84,26 @@ function openAdminEntry(hash) {
     return;
   }
   window.location.href = target;
+}
+function openMemberEntry(hash) {
+  var cleanHash = hash || '#home';
+  var target = otsMemberEntry() + cleanHash;
+  var page = String(cleanHash || '').replace(/^#/, '') || 'home';
+  try { localStorage.setItem('ots_current_page', page); } catch(e) {}
+  if (otsIsMemberApp()) {
+    if (cleanHash) window.location.hash = cleanHash;
+    if (typeof showPage === 'function') showPage(page);
+    return;
+  }
+  window.location.href = target;
+}
+function openPublicPage(page) {
+  page = page || 'home';
+  if (otsIsAdminApp()) {
+    openMemberEntry('#' + page);
+    return;
+  }
+  showPage(page);
 }
 
 // -- Neon DB: No realtime WebSocket - using polling for cross-device sync --
@@ -520,6 +544,7 @@ async function loadClientErrorReports() {
 function renderClientErrorReports(rows) {
   var el = document.getElementById('clientErrorReportsList');
   if (!el) return;
+  var canEditErrors = hasAdminPerm('errors');
   if (!rows.length) {
     el.innerHTML = '<div class="table-empty"><span class="emoji"></span>No error reports found</div>';
     return;
@@ -536,7 +561,7 @@ function renderClientErrorReports(rows) {
       '</div>' +
       (r.stack ? '<div class="error-report-stack">' + esc(r.stack) + '</div>' : '') +
       '<div class="error-report-actions">' +
-        (r.handled ? '<span class="error-report-pill">reviewed</span>' : '<button class="filter-btn" onclick="markClientErrorHandled(' + esc(JSON.stringify(String(r.id || ''))) + ')">Mark Reviewed</button>') +
+        (r.handled ? '<span class="error-report-pill">reviewed</span>' : (canEditErrors ? '<button class="filter-btn perm-errors-edit" onclick="markClientErrorHandled(' + esc(JSON.stringify(String(r.id || ''))) + ')">Mark Reviewed</button>' : '<span class="error-report-pill">needs review</span>')) +
       '</div>' +
     '</div>';
   }).join('');
@@ -559,6 +584,7 @@ function formatDateTime(value) {
 }
 
 async function markClientErrorHandled(id) {
+  if (!requireAdminPerm('errors', 'error report review')) return;
   try {
     await neonSQL('UPDATE client_error_reports SET handled=true WHERE id=$1', [id]);
     loadClientErrorReports();
@@ -569,6 +595,7 @@ async function markClientErrorHandled(id) {
 }
 
 function testClientErrorReporting() {
+  if (!requireAdminPerm('errors', 'error report testing')) return;
   reportClientError('manual-test', new Error('Manual test report from admin panel'), { severity:'info' });
   showToast('', 'Error Reports', 'Test report sent. Refresh in a moment.');
   setTimeout(loadClientErrorReports, 1200);
@@ -965,9 +992,18 @@ const LIGHT_PROOF_SQL = "CASE WHEN LENGTH(COALESCE(proof_url,'')) > 0 THEN '__up
 function isProofPlaceholder(url) {
   return String(url || '') === '__uploaded__';
 }
+function isUsableProofImageUrl(url) {
+  var s = String(url || '').trim();
+  if (!s || isProofPlaceholder(s)) return false;
+  return /^data:image\//i.test(s) || /^https?:\/\//i.test(s) || /^blob:/i.test(s);
+}
+function bookingHasProofRecord(b) {
+  return !!(b && (b.proofUrl || b.proofClaimed));
+}
 async function fetchBookingProofUrl(bookingId) {
   var rows = await neonSQL('SELECT proof_url FROM bookings WHERE id=$1 LIMIT 1', [bookingId]);
-  return rows && rows[0] ? (rows[0].proof_url || '') : '';
+  var proof = rows && rows[0] ? (rows[0].proof_url || '') : '';
+  return isUsableProofImageUrl(proof) ? proof : '';
 }
 function mapVenueRows(vRows) {
   return (vRows || []).map(function(v){ return {
@@ -1022,20 +1058,21 @@ function liveCoreBookingsQuery() {
   }
   var myPhone = _normPhone(memberPhone || '');
   var myEmail = (memberEmail || '').trim().toLowerCase();
+  var today = todayIsoLocal();
   if (memberLoggedIn && (myPhone || myEmail)) {
     return {
       sql: 'SELECT ' + cols + ' FROM bookings ' +
-        'WHERE status=$1 ' +
-        '   OR RIGHT(REGEXP_REPLACE(phone,\'[^0-9]\',\'\',\'g\'),10) = $2 ' +
-        '   OR LOWER(TRIM(email)) = $3 ' +
-        '   OR performers LIKE $4 ' +
+        'WHERE (LOWER(COALESCE(status,\'\')) IN ($1,$2) AND LEFT(date::TEXT,10) >= $3) ' +
+        '   OR RIGHT(REGEXP_REPLACE(phone,\'[^0-9]\',\'\',\'g\'),10) = $4 ' +
+        '   OR LOWER(TRIM(email)) = $5 ' +
+        '   OR performers LIKE $6 ' +
         'ORDER BY date ASC, created_at DESC LIMIT 300',
-      params: ['confirmed', myPhone || '', myEmail || '', '%' + (myPhone || '__NO_PHONE__') + '%']
+      params: ['confirmed', 'pending', today, myPhone || '', myEmail || '', '%' + (myPhone || '__NO_PHONE__') + '%']
     };
   }
   return {
-    sql: 'SELECT ' + cols + ' FROM bookings WHERE status=$1 ORDER BY date ASC, created_at DESC LIMIT 180',
-    params: ['confirmed']
+    sql: 'SELECT ' + cols + ' FROM bookings WHERE LOWER(COALESCE(status,\'\')) IN ($1,$2) AND LEFT(date::TEXT,10) >= $3 ORDER BY date ASC, created_at DESC LIMIT 300',
+    params: ['confirmed', 'pending', today]
   };
 }
 
@@ -1408,6 +1445,40 @@ function getBookedVenueDates() {
     .filter(function(b){ return b && b.status === 'confirmed' && normalizeVenueDate(b.date); })
     .map(function(b){ return normalizeVenueDate(b.date); }));
 }
+function isSlotBlockingBooking(b) {
+  return ['pending','confirmed','approved','completed'].indexOf(normalizeStatus(b && b.status, '')) > -1;
+}
+function isBookingForVenueSlot(b, v) {
+  if (!b || !v) return false;
+  if (b.venueId && v.id && String(b.venueId) === String(v.id)) return true;
+  var bookingDate = normalizeVenueDate(b.date);
+  var venueDate = normalizeVenueDate(v.date);
+  if (!bookingDate || !venueDate || bookingDate !== venueDate) return false;
+  return normalizeVenueNameForDuplicate(b.venue) === normalizeVenueNameForDuplicate(v.name);
+}
+function getVenueSlotBlockingBooking(v, statusName) {
+  return (allBookings || []).find(function(b) {
+    if (!isSlotBlockingBooking(b) || !isBookingForVenueSlot(b, v)) return false;
+    return statusName ? normalizeStatus(b.status, '') === statusName : true;
+  }) || null;
+}
+function showVenueSlotBlockedNotice(v, bookingLike) {
+  var status = normalizeStatus(bookingLike && bookingLike.status, '');
+  if (status === 'pending') {
+    showToast('', 'Slot Pending', (v && v.name ? v.name + ' ' : '') + 'is already pending admin approval.');
+  } else {
+    showToast('', 'Slot Booked', (v && v.name ? v.name + ' ' : '') + 'is already booked.');
+  }
+}
+async function fetchLiveVenueSlotBlockingBooking(v) {
+  if (!v) return null;
+  var venueDate = normalizeVenueDate(v.date);
+  var rows = await neonSQL(
+    "SELECT id,status FROM bookings WHERE LOWER(COALESCE(status,'')) IN ('pending','confirmed','approved','completed') AND (venue_id=$1 OR (LEFT(date::TEXT,10)=$2 AND LOWER(TRIM(venue))=LOWER(TRIM($3)))) ORDER BY created_at DESC LIMIT 1",
+    [String(v.id || ''), venueDate, String(v.name || '')]
+  );
+  return rows && rows[0] ? rows[0] : null;
+}
 function getOpenVenueDatesSorted() {
   return Array.from(getVenueDates()).sort();
 }
@@ -1627,8 +1698,10 @@ function renderVenueList() {
       const monthName = MONTHS[mo - 1];
 
       const venueCards = dayVenues.map(v => {
-        const hasPending   = allBookings.some(b => b.venueId === v.id && b.status === 'pending');
-        const hasConfirmed = allBookings.some(b => b.venueId === v.id && b.status === 'confirmed');
+        const pendingBooking = getVenueSlotBlockingBooking(v, 'pending');
+        const confirmedBooking = getVenueSlotBlockingBooking(v, 'confirmed') || getVenueSlotBlockingBooking(v, 'approved') || getVenueSlotBlockingBooking(v, 'completed');
+        const hasPending   = !!pendingBooking;
+        const hasConfirmed = !!confirmedBooking;
         const isPastMonthVenue = isPastMonthGroup || isVenueBeforeToday(v);
         const blocked    = isPastMonthVenue || hasPending || hasConfirmed;
         const cardClass  = [
@@ -1637,7 +1710,9 @@ function renderVenueList() {
         ].filter(Boolean).join(' ');
         const landmarkHtml = v.landmark ? `<div class="vrc-meta" style="color:var(--blue);"> ${otsEscapeHtml(v.landmark)}</div>` : '';
         const venueTypeBadge = venueTypeBadgeHtml(v);
-        const statusBadge = (hasConfirmed || venueTypeBadge) ? `<div class="vrc-badges">${hasConfirmed ? '<span class="vrc-badge vrc-booked">Booked</span>' : ''}${venueTypeBadge}</div>` : '';
+        const pendingBadge = hasPending ? '<span class="vrc-badge vrc-pending">Pending</span>' : '';
+        const bookedBadge = hasConfirmed ? '<span class="vrc-badge vrc-booked">Booked</span>' : '';
+        const statusBadge = (bookedBadge || pendingBadge || venueTypeBadge) ? `<div class="vrc-badges">${bookedBadge}${pendingBadge}${venueTypeBadge}</div>` : '';
         const actionBtn = isPastMonthVenue
           ? `<span style="font-size:.72rem;color:var(--muted);font-style:italic;">Booking closed</span>`
           : hasConfirmed
@@ -1716,6 +1791,16 @@ function pickVenue(id) {
     validateForm();
     return;
   }
+  var blockingBooking = getVenueSlotBlockingBooking(v);
+  if (blockingBooking) {
+    showVenueSlotBlockedNotice(v, blockingBooking);
+    selectedVenueId = null;
+    try { localStorage.removeItem('ots_selected_venue'); } catch(e){}
+    renderVenueList();
+    updateSummary();
+    validateForm();
+    return;
+  }
   // Members-only gate
   if (!memberLoggedIn) {
     showMemberLogin(id);
@@ -1739,6 +1824,7 @@ function pickVenue(id) {
 // ADMIN SESSION PERSISTENCE
 // =======================================
 function _saveAdminSession() {
+  currentAdminRole = normalizeAdminRole(currentAdminRole);
   var data = JSON.stringify({ exp: Date.now() + 365*24*60*60*1000, v: 3, u: currentAdminUsername, r: currentAdminRole, p: currentAdminPermissions || {} });
   try { localStorage.setItem('ots_admin_session', data); } catch(e){}
   try { sessionStorage.setItem('ots_admin_session', data); } catch(e){}
@@ -1759,24 +1845,10 @@ function _clearAdminSession() {
   document.documentElement.removeAttribute('data-admin-active');
 }
 function _hasAdminSession() {
-  // Check localStorage
+  if (_getAdminSessionData()) return true;
+  // Cookie alone cannot safely restore role/access. Keep it only as a page-ready hint.
   try {
-    var ls = JSON.parse(localStorage.getItem('ots_admin_session') || 'null');
-    if (ls && (ls.u || ls.r || ls.v)) return true;
-  } catch(e){}
-  // Check sessionStorage
-  try {
-    var ss = JSON.parse(sessionStorage.getItem('ots_admin_session') || 'null');
-    if (ss && (ss.u || ss.r || ss.v)) return true;
-  } catch(e){}
-  // Check cookie
-  try {
-    if (document.cookie.split(';').some(function(c){ return c.trim().startsWith('ots_admin_s=1'); })) return true;
-  } catch(e){}
-  // window.name fallback
-  try {
-    var wn2={}; try{wn2=JSON.parse(window.name||'{}')}catch(_){}
-    if (wn2['ots.ots_admin_s']) { var d4=JSON.parse(wn2['ots.ots_admin_s']); if(d4&&(d4.u||d4.r||d4.v)) return true; }
+    if (document.cookie.split(';').some(function(c){ return c.trim().startsWith('ots_admin_s=1'); })) return false;
   } catch(e){}
   return false;
 }
@@ -1788,16 +1860,20 @@ function _getAdminSessionData() {
 }
 function restoreAdminSession() {
   try {
-    if (_hasAdminSession()) {
+    var sd = _getAdminSessionData();
+    if (sd) {
       adminLoggedIn = true;
-      var sd = _getAdminSessionData();
-      if (sd && sd.u) { currentAdminUsername = sd.u; currentAdminRole = sd.r || 'admin'; currentAdminPermissions = parseAdminPermissions(sd.p); }
+      currentAdminUsername = sd.u || currentAdminUsername || getAdminUser();
+      currentAdminRole = normalizeAdminRole(sd.r || currentAdminRole || 'admin');
+      currentAdminPermissions = parseAdminPermissions(sd.p);
       _saveAdminSession(); // renew all stores
-      document.getElementById('logoutBtn').classList.add('show');
+      var logout = document.getElementById('logoutBtn'); if (logout) logout.classList.add('show');
       var _ab = document.getElementById('adminPanelBtn'); if (_ab) _ab.style.display = '';
       _applySuperAdminVisibility();
       // Silently pre-load claims so the badge count shows immediately
       setTimeout(function() { loadAdminClaims().catch(function(){}); }, 1500);
+    } else {
+      _clearAdminSession();
     }
   } catch(e) { console.warn('Admin session restore error:', e); }
 }
@@ -3623,10 +3699,13 @@ async function init() {
     document.getElementById('memberLoginPage').classList.add('hidden');
     // Restore where they were or go to venues
     try {
+      const hashPage = otsPublicPageFromHash();
       const savedPage = localStorage.getItem('ots_current_page');
       const savedVenueId = localStorage.getItem('ots_selected_venue');
       if (savedVenueId) selectedVenueId = savedVenueId;
-      if (savedPage && ['home','venues','form','myrequests','leaderboard','profile','chat'].includes(savedPage)) {
+      if (hashPage) {
+        showPage(hashPage);
+      } else if (savedPage && ['home','venues','form','myrequests','leaderboard','profile','chat'].includes(savedPage)) {
         showPage(savedPage);
       } else {
         showPage('home');
@@ -3732,7 +3811,8 @@ function validateForm() {
   const phone = document.getElementById('inp-phone').value.trim();
   const type  = document.getElementById('inp-type').value;
   const venue = venues.find(v=>v.id===selectedVenueId);
-  const ok = selectedVenueId && venue && !isVenueBeforeToday(venue) && band && booker && isValidPhone(phone) && type;
+  const blockedSlot = venue ? getVenueSlotBlockingBooking(venue) : null;
+  const ok = selectedVenueId && venue && !isVenueBeforeToday(venue) && !blockedSlot && band && booker && isValidPhone(phone) && type;
   document.getElementById('bookBtn').disabled = !ok;
 }
 ['inp-booker','inp-band','inp-type'].forEach(id=>
@@ -3756,6 +3836,36 @@ async function submitBooking() {
     updateSummary();
     validateForm();
     showPage('venues');
+    return;
+  }
+  var cachedBlockingBooking = getVenueSlotBlockingBooking(venue);
+  if (cachedBlockingBooking) {
+    showVenueSlotBlockedNotice(venue, cachedBlockingBooking);
+    selectedVenueId = null;
+    try { localStorage.removeItem('ots_selected_venue'); } catch(e){}
+    renderVenueList();
+    updateSummary();
+    validateForm();
+    showPage('venues');
+    return;
+  }
+  try {
+    var liveBlockingBooking = await fetchLiveVenueSlotBlockingBooking(venue);
+    if (liveBlockingBooking) {
+      showVenueSlotBlockedNotice(venue, liveBlockingBooking);
+      selectedVenueId = null;
+      try { localStorage.removeItem('ots_selected_venue'); } catch(e){}
+      await refreshLiveCoreData({ maxAgeMs: 0, showLoading: false, silentIfCached: true }).catch(function(){});
+      renderVenueList();
+      updateSummary();
+      validateForm();
+      showPage('venues');
+      return;
+    }
+  } catch(e) {
+    console.warn('[OTS] slot availability check failed:', e && (e.message || e));
+    showToast('', 'Please Try Again', 'Could not confirm the latest slot status. Check once and submit again.');
+    validateForm();
     return;
   }
   const formEmail = (document.getElementById('inp-email') ? document.getElementById('inp-email').value.trim() : '');
@@ -4530,11 +4640,15 @@ function refreshAdmin(attempt) {
         }
         if (key === 'reportBookings') {
           var mappedReportBookings = mapBookingRows(result.value || []);
-          if (!mappedReportBookings.length && attempt < 2) {
+          var cachedReportCount = countCachedBookingsForMonth(task.monthKey);
+          if (!mappedReportBookings.length && cachedReportCount) {
+            needsRetry = true;
+            _monthlyReportLoadFailedMonthKey = task.monthKey || '';
+          } else if (!mappedReportBookings.length && attempt < 2) {
             needsRetry = true;
           } else {
-            mergeMonthlyReportBookings(mappedReportBookings, task.monthKey);
-            _monthlyReportLoadedMonthKey = task.monthKey || '';
+            var mergedReportRows = mergeMonthlyReportBookings(mappedReportBookings, task.monthKey);
+            if (mergedReportRows !== false) _monthlyReportLoadedMonthKey = task.monthKey || '';
           }
         }
         gotAnyLiveData = true;
@@ -4605,7 +4719,7 @@ window.addEventListener('unhandledrejection', function(e){
 
 function switchAdminTab(tab) {
   if (tab === 'approvals') tab = 'venues'; // redirect removed tab
-  if ((tab === 'settings' || tab === 'superadmin') && currentAdminRole !== 'superadmin') {
+  if ((tab === 'settings' || tab === 'superadmin') && !isCurrentSuperAdmin()) {
     showToast('', 'Super Admin Only', 'Only the Super Admin can open Settings.');
     tab = 'venues';
   }
@@ -4618,6 +4732,7 @@ function switchAdminTab(tab) {
     if (tbtn) tbtn.classList.toggle('active', t===tab);
     if (pane) pane.style.display = t===tab ? 'block' : 'none';
   });
+  syncAdminUploadInputsForTab(tab);
   if (tab==='venues')      renderVenueManager();
   if (tab==='bookings')    filterTable();
   if (tab==='claims')      loadAdminClaims();
@@ -4635,6 +4750,143 @@ function switchAdminTab(tab) {
   if (tab==='superadmin')  loadSuperAdminData();
   _applySuperAdminVisibility();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function syncAdminUploadInputsForTab(tab) {
+  var uploadInputs = {
+    csvFileInput: tab === 'import',
+    photoFileInput: tab === 'photos',
+    communityAdImageInput: tab === 'ads',
+    memberCsvInput: tab === 'members',
+    'zone-csv-file': tab === 'points'
+  };
+  Object.keys(uploadInputs).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = !uploadInputs[id];
+    el.style.pointerEvents = uploadInputs[id] ? '' : 'none';
+  });
+}
+
+var _safeFileInputId = '';
+var _safeFileInputUntil = 0;
+var _adminAccessDisabledFileInputs = [];
+
+function isAdminAccessControlModalOpen() {
+  var access = document.getElementById('adminAccessModal');
+  var create = document.getElementById('createAdminModal');
+  return !!((access && access.classList.contains('show')) || (create && create.classList.contains('show')));
+}
+
+function setAdminAccessControlModalOpen(enable) {
+  try { document.body.classList.toggle('admin-access-control-open', !!enable); } catch(e) {}
+  if (enable) {
+    _safeFileInputId = '';
+    _safeFileInputUntil = 0;
+    if (!_adminAccessDisabledFileInputs.length) {
+      try {
+        document.querySelectorAll('input[type="file"]').forEach(function(input) {
+          _adminAccessDisabledFileInputs.push({
+            el: input,
+            disabled: !!input.disabled,
+            tabindex: input.getAttribute('tabindex'),
+            ariaHidden: input.getAttribute('aria-hidden')
+          });
+          input.disabled = true;
+          input.setAttribute('tabindex', '-1');
+          input.setAttribute('aria-hidden', 'true');
+        });
+      } catch(e) {}
+    }
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e) {}
+    return;
+  }
+  _adminAccessDisabledFileInputs.forEach(function(item) {
+    if (!item || !item.el) return;
+    item.el.disabled = item.disabled;
+    if (item.tabindex === null) item.el.removeAttribute('tabindex');
+    else item.el.setAttribute('tabindex', item.tabindex);
+    if (item.ariaHidden === null) item.el.removeAttribute('aria-hidden');
+    else item.el.setAttribute('aria-hidden', item.ariaHidden);
+  });
+  _adminAccessDisabledFileInputs = [];
+}
+
+function isUploadTriggerElement(el) {
+  if (!el || !el.closest) return false;
+  return !!el.closest('input[type="file"], label[for], [onclick*="openFileInputSafely"], .csv-import-zone, .member-phone-import-zone, .photo-drop-zone, .id-proof-upload-area, .btn-upload-photo, .community-ad-image-btn, .proof-file-label');
+}
+
+function isInsideVisibleModal(el) {
+  if (!el || !el.closest) return false;
+  return !!el.closest('.modal-overlay.show, .monthly-report-edit-modal.show');
+}
+
+function blockEvent(event) {
+  if (!event) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+  return false;
+}
+
+function openFileInputSafely(id) {
+  if (isAdminAccessControlModalOpen()) return false;
+  var el = document.getElementById(id);
+  if (!el || el.disabled) return false;
+  _safeFileInputId = id;
+  _safeFileInputUntil = Date.now() + 1200;
+  try { el.click(); } catch(e) {}
+  setTimeout(function() {
+    if (_safeFileInputId === id && Date.now() >= _safeFileInputUntil) {
+      _safeFileInputId = '';
+      _safeFileInputUntil = 0;
+    }
+  }, 1300);
+  return false;
+}
+
+function isVisibleFileInputForActiveArea(input) {
+  if (!input || input.disabled) return false;
+  var style = window.getComputedStyle ? window.getComputedStyle(input) : null;
+  if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+  var rect = input.getBoundingClientRect ? input.getBoundingClientRect() : null;
+  if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+  var id = input.id || '';
+  if (id === 'csvFileInput') return currentAdminTab === 'import';
+  if (id === 'memberCsvInput') return currentAdminTab === 'members';
+  if (id === 'zone-csv-file') return currentAdminTab === 'points';
+  return false;
+}
+
+document.addEventListener('click', function(event) {
+  var target = event.target;
+  if (document.body.classList.contains('modal-lock') && isUploadTriggerElement(target) && !isInsideVisibleModal(target)) {
+    return blockEvent(event);
+  }
+  if (isAdminAccessControlModalOpen() && isUploadTriggerElement(target)) {
+    return blockEvent(event);
+  }
+  if (!target || !target.matches || !target.matches('input[type="file"]')) return;
+  if (isAdminAccessControlModalOpen()) {
+    return blockEvent(event);
+  }
+  var id = target.id || '';
+  var expected = id && _safeFileInputId === id && Date.now() <= _safeFileInputUntil;
+  if (expected || isVisibleFileInputForActiveArea(target)) return;
+  return blockEvent(event);
+}, true);
+
+document.addEventListener('pointerdown', function(event) {
+  if (document.body.classList.contains('modal-lock') && isUploadTriggerElement(event.target) && !isInsideVisibleModal(event.target)) {
+    return blockEvent(event);
+  }
+  if (!isAdminAccessControlModalOpen() || !isUploadTriggerElement(event.target)) return;
+  return blockEvent(event);
+}, true);
+
+function setSuperAdminUploadLock(enable) {
+  try { document.body.classList.toggle('super-admin-control-mode', !!enable); } catch(e) {}
 }
 
 // ========================================
@@ -5239,7 +5491,7 @@ function _openProofOverlay(url) {
 }
 
 async function saveAdminPhone() {
-  if (currentAdminRole !== 'superadmin') { showToast('', 'Super Admin Only', 'Only Super Admin can change settings.'); return; }
+  if (!isCurrentSuperAdmin()) { showToast('', 'Super Admin Only', 'Only Super Admin can change settings.'); return; }
   var inp = document.getElementById('settings-admin-phone');
   var status = document.getElementById('settings-phone-status');
   if (!inp) return;
@@ -5263,7 +5515,7 @@ async function saveAdminPhone() {
   }
 }
 async function saveHelpdeskNumbers() {
-  if (currentAdminRole !== 'superadmin') { showToast('', 'Super Admin Only', 'Only Super Admin can change settings.'); return; }
+  if (!isCurrentSuperAdmin()) { showToast('', 'Super Admin Only', 'Only Super Admin can change settings.'); return; }
   var inp = document.getElementById('settings-helpdesk-numbers');
   var status = document.getElementById('settings-helpdesk-status');
   if (!inp) return;
@@ -5288,7 +5540,7 @@ async function saveHelpdeskNumbers() {
   }
 }
 async function saveZoneNames() {
-  if (currentAdminRole !== 'superadmin') { showToast('', 'Super Admin Only', 'Only Super Admin can change settings.'); return; }
+  if (!isCurrentSuperAdmin()) { showToast('', 'Super Admin Only', 'Only Super Admin can change settings.'); return; }
   var inp = document.getElementById('settings-zone-names');
   var status = document.getElementById('settings-zone-status');
   if (!inp) return;
@@ -5351,7 +5603,7 @@ function getVenueTime(venueId) {
   return v ? `${v.day||''} ${formatDateShort(v.date)} - ${formatVenueTimeRange(v)}` : '-';
 }
 function venueNameKey(value) {
-  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalizeVenueNameForDuplicate(value);
 }
 function getLiveVenueName(booking) {
   var v = booking && booking.venueId ? venues.find(function(x){ return x.id === booking.venueId; }) : null;
@@ -5383,13 +5635,16 @@ async function propagateVenueRename(oldName, newName, editedVenueId) {
   myBookings.forEach(updateBookingName);
 
   try {
-    await neonSQL("UPDATE venues SET name=$1 WHERE LOWER(TRIM(REGEXP_REPLACE(name,'\\s+',' ','g')))=$2", [newClean, oldKey]);
+    await neonSQL(
+      "UPDATE venues SET name=$1 WHERE LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(name,'&',' and ','g'),'[^a-zA-Z0-9]+',' ','g')))=$2",
+      [newClean, oldKey]
+    );
   } catch(e) {
     console.warn('[OTS] venue rename remote venue update skipped:', e && (e.message || e));
   }
   try {
     await neonSQL(
-      "UPDATE bookings SET venue=$1 WHERE LOWER(TRIM(REGEXP_REPLACE(venue,'\\s+',' ','g')))=$2 OR venue_id = ANY($3::text[])",
+      "UPDATE bookings SET venue=$1 WHERE LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(venue,'&',' and ','g'),'[^a-zA-Z0-9]+',' ','g')))=$2 OR venue_id = ANY($3::text[])",
       [newClean, oldKey, affectedIds]
     );
   } catch(e) {
@@ -5411,7 +5666,7 @@ async function propagateVenueTypeByName(name, venueType) {
   });
   try {
     await neonSQL(
-      "UPDATE venues SET venue_type=$1 WHERE LOWER(TRIM(REGEXP_REPLACE(name,'\\s+',' ','g')))=$2",
+      "UPDATE venues SET venue_type=$1 WHERE LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(name,'&',' and ','g'),'[^a-zA-Z0-9]+',' ','g')))=$2",
       [normalizedType, key]
     );
   } catch(e) {
@@ -6015,14 +6270,14 @@ function setFilter(f) {
   filterTable();
 }
 function isBookingNeedsProofOrPoint(b) {
-  return !!(b && b.status === 'confirmed' && isBookingShowOver(b, new Date()) && (!b.proofUrl || !b.proofClaimed));
+  return !!(b && b.status === 'confirmed' && isBookingShowOver(b, new Date()) && !b.proofClaimed);
 }
 function bookingFollowUpState(b) {
   if (!b || b.status !== 'confirmed') return { cls:'info', label:'-' };
   if (!isBookingShowOver(b, new Date())) return { cls:'info', label:'Upcoming' };
+  if (b.proofClaimed) return { cls:'done', label:'Claimed' };
   if (!b.proofUrl) return { cls:'missing', label:'Photo Missing' };
-  if (!b.proofClaimed) return { cls:'pending', label:'Claim Pending' };
-  return { cls:'done', label:'Claimed' };
+  return { cls:'pending', label:'Claim Pending' };
 }
 function filterTable() {
   const q=(document.getElementById('adminSearch')?.value||'').toLowerCase();
@@ -6076,13 +6331,13 @@ function renderAdminProofCell(b, canRescueShows) {
     ? `<button class="btn-secondary" style="font-size:.62rem;padding:.25rem .45rem;margin-top:.3rem;" onclick="adminAllowProofUpload('${id}')">Allow Upload</button>
        <button class="btn-secondary" style="font-size:.62rem;padding:.25rem .45rem;margin-top:.3rem;" onclick="adminGrantShowPoint('${id}','team')">Add Member</button>`
     : '';
-  if (b.proofClaimed && b.proofUrl) {
-    var proofPreview = isProofPlaceholder(b.proofUrl)
+  if (b.proofClaimed) {
+    var proofPreview = b.proofUrl && isProofPlaceholder(b.proofUrl)
       ? `<button class="btn-secondary" style="font-size:.62rem;padding:.25rem .45rem;" onclick="adminViewProof('${id}')">View Photo</button>`
-      : `<div style="display:flex;align-items:center;gap:.4rem;cursor:pointer;" onclick="adminViewProof('${id}')">
+      : (b.proofUrl ? `<div style="display:flex;align-items:center;gap:.4rem;cursor:pointer;" onclick="adminViewProof('${id}')">
            <img src="${b.proofUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1.5px solid var(--green);" alt="proof">
            <span style="font-size:.65rem;font-weight:700;color:var(--green);letter-spacing:.04em;"> CLAIMED</span>
-         </div>`;
+         </div>` : `<span style="font-size:.68rem;color:var(--green);font-weight:800;letter-spacing:.04em;">CLAIMED</span>`);
     return proofPreview + rescueButtons;
   }
   if (b.proofUrl) {
@@ -6138,7 +6393,7 @@ function renderAdminTable(rows) {
       <div class="td">${renderAdminProofCell(b, canRescueShows)}</div>
       <div class="td"><span class="td-followup ${follow.cls}">${follow.label}</span></div>
       <div class="td td-actions">
-        ${canApproveSlots ? `<button class="btn-secondary" style="font-size:.62rem;padding:.24rem .45rem;margin-top:.3rem;" onclick="openAdminBookingEdit('${b.id}')">Edit</button>` : ''}
+        ${canApproveSlots ? `<button class="btn-secondary" style="font-size:.62rem;padding:.24rem .45rem;margin-top:.3rem;" onclick="openAdminBookingEdit('${otsJsString(b.id)}', event)">Edit</button>` : ''}
         ${b.status==='pending' && canApproveSlots ? `
           <button class="action-btn approve" onclick="approveBooking('${b.id}')"></button>
           <button class="action-btn reject"  onclick="rejectBooking('${b.id}')">x</button>`
@@ -6161,6 +6416,31 @@ function formatCheckinTime(value) {
 var _adminBookingEditId = null;
 var _adminBookingEditMode = 'edit';
 
+function suspendAdminBookingEditFileInputs(enable) {
+  if (!enable) {
+    (_adminBookingEditSuspendedFiles || []).forEach(function(item) {
+      if (!item || !item.el) return;
+      item.el.disabled = item.disabled;
+      item.el.style.pointerEvents = item.pointerEvents;
+    });
+    _adminBookingEditSuspendedFiles = [];
+    return;
+  }
+  suspendAdminBookingEditFileInputs(false);
+  _adminBookingEditSuspendedFiles = Array.from(document.querySelectorAll('input[type="file"]')).map(function(el) {
+    var item = {
+      el: el,
+      disabled: !!el.disabled,
+      pointerEvents: el.style.pointerEvents || ''
+    };
+    if (!el.closest('#adminBookingEditModal')) {
+      el.disabled = true;
+      el.style.pointerEvents = 'none';
+    }
+    return item;
+  });
+}
+
 function _setAdminBookingEditError(message) {
   var el = document.getElementById('abe-err');
   if (!el) return;
@@ -6172,6 +6452,16 @@ function _bookingTypeOptionsValue(value) {
   var typeEl = document.getElementById('abe-type');
   if (!typeEl) return;
   var val = String(value || '');
+  if (typeEl.tagName !== 'SELECT') {
+    typeEl.value = val;
+    var list = document.getElementById('abe-type-options');
+    if (list && val && !Array.from(list.options || []).some(function(o){ return o.value === val; })) {
+      var opt = document.createElement('option');
+      opt.value = val;
+      list.appendChild(opt);
+    }
+    return;
+  }
   var found = false;
   Array.from(typeEl.options).forEach(function(o){ if (o.value === val || o.textContent === val) found = true; });
   if (!found && val) {
@@ -6215,7 +6505,10 @@ function adminBookingVenueChanged() {
   if (dateEl && v.date) dateEl.value = v.date;
 }
 
-function openAdminBookingEdit(id) {
+function openAdminBookingEdit(id, event) {
+  if (event) {
+    try { event.preventDefault(); event.stopPropagation(); } catch(e) {}
+  }
   if (!requireAdminPerm('slots', 'edit booking')) return;
   var b = allBookings.find(function(x){ return x.id === id; });
   if (!b) return;
@@ -6236,8 +6529,15 @@ function openAdminBookingEdit(id) {
   document.getElementById('abe-status').value = b.status || 'pending';
   document.getElementById('abe-notes').value = b.notes || '';
   _setAdminBookingEditError('');
-  try { document.body.classList.add('modal-lock'); } catch(e) {}
+  suspendAdminBookingEditFileInputs(true);
+  try { document.body.classList.add('modal-lock', 'admin-booking-edit-open'); } catch(e) {}
   modal.classList.add('show');
+  setTimeout(function(){
+    var first = document.getElementById('abe-team');
+    if (first) {
+      try { first.focus({ preventScroll:true }); } catch(e) { try { first.focus(); } catch(_e) {} }
+    }
+  }, 80);
 }
 
 function openAdminEmergencyCredit() {
@@ -6259,7 +6559,8 @@ function openAdminEmergencyCredit() {
   document.getElementById('abe-status').value = 'confirmed';
   document.getElementById('abe-notes').value = 'Emergency admin show credit';
   _setAdminBookingEditError('');
-  try { document.body.classList.add('modal-lock'); } catch(e) {}
+  suspendAdminBookingEditFileInputs(true);
+  try { document.body.classList.add('modal-lock', 'admin-booking-edit-open'); } catch(e) {}
   modal.classList.add('show');
 }
 
@@ -6276,7 +6577,8 @@ function openAdminEmergencyUpload() {
 function closeAdminBookingEdit() {
   var modal = document.getElementById('adminBookingEditModal');
   if (modal) modal.classList.remove('show');
-  try { document.body.classList.remove('modal-lock'); } catch(e) {}
+  try { document.body.classList.remove('modal-lock', 'admin-booking-edit-open'); } catch(e) {}
+  suspendAdminBookingEditFileInputs(false);
   _adminBookingEditId = null;
 }
 
@@ -6341,21 +6643,8 @@ async function saveExistingBookingEdit(data) {
   var b = allBookings.find(function(x){ return x.id === _adminBookingEditId; });
   if (!b) throw new Error('Booking not found.');
   var oldStatus = b.status;
-  var updates = {
-    venue_id: data.venueId,
-    venue: data.venue,
-    date: data.date,
-    type: data.type,
-    name: data.name,
-    booked_by: data.bookedBy,
-    phone: data.phone,
-    email: data.email,
-    notes: data.notes,
-    visibility: data.visibility,
-    status: data.status
-  };
-  await dbPatch('bookings', b.id, updates);
-  Object.assign(b, {
+  var saved = await updateBookingDetailsAndReadBack(b.id, data, b.name);
+  Object.assign(b, saved || {
     venueId: data.venueId,
     venue: data.venue,
     date: data.date,
@@ -6391,6 +6680,47 @@ async function saveExistingBookingEdit(data) {
   });
   logAdminAction('edit_booking', data.name + ' @ ' + data.venue + ' #' + b.id).catch(function(){});
   showToast('', 'Booking Updated', 'Changes are saved and synced.');
+}
+
+async function updateBookingDetailsAndReadBack(id, data, oldTeamName) {
+  var updateSql =
+    'UPDATE bookings SET venue_id=$2, venue=$3, date=$4, type=$5, name=$6, booked_by=$7, phone=$8, email=$9, notes=$10, visibility=$11, status=$12 WHERE id=$1';
+  var params = [
+    id,
+    data.venueId,
+    data.venue,
+    data.date,
+    data.type,
+    data.name,
+    data.bookedBy,
+    data.phone,
+    data.email,
+    data.notes,
+    data.visibility,
+    data.status
+  ];
+  await neonSQL(updateSql, params);
+  if (oldTeamName && oldTeamName !== data.name) {
+    neonSQL(
+      "UPDATE claims SET member_name=$2 WHERE booking_id=$1 AND COALESCE(member_name,'')=$3",
+      [id, data.name, oldTeamName]
+    ).catch(function(){});
+  }
+  var rows = await neonSQL(
+    'SELECT id, venue_id, venue, date, type, name, booked_by, phone, email, notes, visibility, status, created_at,' +
+    LIGHT_PROOF_SQL + ',proof_claimed,checkin_at,checkin_lat,checkin_lng,checkin_accuracy,checkin_map_url,performers FROM bookings WHERE id=$1 LIMIT 1',
+    [id]
+  );
+  if (!rows || !rows.length) throw new Error('Booking save failed: row was not found after update.');
+  var saved = mapBookingRows(rows)[0];
+  var mismatches = [];
+  if (String(saved.type || '') !== String(data.type || '')) mismatches.push('type');
+  if (String(saved.name || '') !== String(data.name || '')) mismatches.push('team name');
+  if (String(saved.bookedBy || '') !== String(data.bookedBy || '')) mismatches.push('booked by');
+  if (mismatches.length) {
+    throw new Error('Booking save did not update ' + mismatches.join(', ') + '. Please refresh and try again.');
+  }
+  return saved;
 }
 
 async function createEmergencyShowCredit(data) {
@@ -6739,10 +7069,48 @@ var _monthlyReportLastContextKey = '';
 var _monthlyReportLoadedMonthKey = '';
 var _monthlyReportLoadFailedMonthKey = '';
 var _monthlyReportRefreshPromise = null;
+var _monthlyReportLastGoodRows = [];
+var _monthlyReportLastGoodContextKey = '';
+var _monthlyReportRowsByContext = {};
+var _monthlyReportPrepareSeq = 0;
+var _adminBookingEditSuspendedFiles = [];
 
 function monthlyReportContextKey(ctx) {
   ctx = ctx || getMonthlyReportContext();
   return String(ctx.monthKey || '') + '|' + String(ctx.type || 'all');
+}
+
+function cacheMonthlyReportRows(ctx, rows) {
+  var key = monthlyReportContextKey(ctx);
+  rows = (rows || []).slice();
+  if (!key || !rows.length) return;
+  _monthlyReportRowsByContext[key] = rows;
+  _monthlyReportLastGoodRows = rows.slice();
+  _monthlyReportLastGoodContextKey = key;
+}
+
+function getCachedMonthlyReportRows(ctx) {
+  var key = monthlyReportContextKey(ctx);
+  var rows = _monthlyReportRowsByContext[key];
+  return rows && rows.length ? rows.slice() : [];
+}
+
+function getCurrentMonthlyReportRows(ctx) {
+  var key = monthlyReportContextKey(ctx);
+  if (_monthlyReportRows.length && _monthlyReportLastContextKey === key) {
+    return _monthlyReportRows.slice();
+  }
+  return getCachedMonthlyReportRows(ctx);
+}
+
+function countCachedReportRowsForMonth(monthKey) {
+  var total = 0;
+  Object.keys(_monthlyReportRowsByContext || {}).forEach(function(key) {
+    if (key.indexOf(String(monthKey || '') + '|') === 0) {
+      total += (_monthlyReportRowsByContext[key] || []).length;
+    }
+  });
+  return total;
 }
 
 function getMonthlyReportMonthKeyForLoad() {
@@ -6756,12 +7124,27 @@ function bookingBelongsToMonth(booking, monthKey) {
   return !!(date && date.slice(0, 7) === monthKey);
 }
 
-function mergeMonthlyReportBookings(mappedBookings, monthKey) {
+function countCachedBookingsForMonth(monthKey) {
+  if (!monthKey) return 0;
+  return (allBookings || []).filter(function(b) { return bookingBelongsToMonth(b, monthKey); }).length;
+}
+
+function mergeMonthlyReportBookings(mappedBookings, monthKey, options) {
   if (!monthKey) return;
+  mappedBookings = mappedBookings || [];
+  options = options || {};
+  var cachedCount = countCachedBookingsForMonth(monthKey);
+  var cachedReportCount = countCachedReportRowsForMonth(monthKey);
+  if (!mappedBookings.length && (cachedCount || cachedReportCount) && !options.allowEmptyReplace) {
+    console.warn('[OTS] monthly report empty refresh ignored for ' + monthKey + '; keeping cached report data.');
+    _monthlyReportLoadFailedMonthKey = monthKey;
+    return false;
+  }
   allBookings = (allBookings || []).filter(function(b) {
     return !bookingBelongsToMonth(b, monthKey);
-  }).concat(mappedBookings || []);
+  }).concat(mappedBookings);
   _monthlyReportLoadFailedMonthKey = '';
+  return true;
 }
 
 function localMonthKey(date) {
@@ -6838,6 +7221,7 @@ function initMonthlyReportControls() {
 }
 
 function saveMonthlyReportTitleDraft() {
+  if (!hasAdminPerm('reports')) return;
   var ctx = getMonthlyReportContext();
   var titleEl = document.getElementById('monthlyReportTitle');
   var draft = readMonthlyReportDraft();
@@ -6865,6 +7249,264 @@ function monthlyReportFootfallFor(row, ctx) {
   var val = draft[key];
   var n = Number(val);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function monthlyReportDefaultDateLabel(row) {
+  var date = monthlyReportDisplayDate(row && row.date);
+  var day = row && row.dayName ? String(row.dayName) : '';
+  return day ? date + ' ' + day : date;
+}
+
+function monthlyReportNormalizeRotation(value) {
+  var n = Math.round(Number(value) || 0);
+  n = ((n % 360) + 360) % 360;
+  if ([90, 180, 270].indexOf(n) > -1) return n;
+  return 0;
+}
+
+var _monthlyReportPhotoData = null;
+var _monthlyReportPhotoPreparing = false;
+
+function monthlyReportRemovedKey(ctx, bookingId) {
+  return monthlyReportDraftField(ctx.monthKey, ctx.type, bookingId, 'removed');
+}
+
+function isMonthlyReportShowRemoved(ctx, bookingId) {
+  var draft = readMonthlyReportDraft();
+  return draft[monthlyReportRemovedKey(ctx, bookingId)] === '1';
+}
+
+function monthlyReportRemovedCount(ctx) {
+  var draft = readMonthlyReportDraft();
+  var prefix = [ctx.monthKey || '', ctx.type || 'all'].join('|') + '|';
+  return Object.keys(draft).filter(function(key) {
+    return key.indexOf(prefix) === 0 && key.slice(-8) === '|removed' && draft[key] === '1';
+  }).length;
+}
+
+function removeMonthlyReportShow(bookingId) {
+  if (!requireAdminPerm('reports', 'monthly report editing')) return;
+  var ctx = getMonthlyReportContext();
+  var draft = readMonthlyReportDraft();
+  draft[monthlyReportRemovedKey(ctx, bookingId)] = '1';
+  writeMonthlyReportDraft(draft);
+  _monthlyReportRows = (_monthlyReportRows || []).filter(function(row) {
+    return String(row.id) !== String(bookingId);
+  });
+  _monthlyReportRowsByContext[monthlyReportContextKey(ctx)] = _monthlyReportRows.slice();
+  renderMonthlyReportRows(ctx, _monthlyReportRows);
+  showToast('', 'Show Removed', 'Removed from this monthly report only.');
+}
+
+function restoreMonthlyReportShows() {
+  if (!requireAdminPerm('reports', 'monthly report editing')) return;
+  var ctx = getMonthlyReportContext();
+  var draft = readMonthlyReportDraft();
+  var prefix = [ctx.monthKey || '', ctx.type || 'all'].join('|') + '|';
+  Object.keys(draft).forEach(function(key) {
+    if (key.indexOf(prefix) === 0 && key.slice(-8) === '|removed') delete draft[key];
+  });
+  writeMonthlyReportDraft(draft);
+  delete _monthlyReportRowsByContext[monthlyReportContextKey(ctx)];
+  generateMonthlyReportPreview(false);
+  showToast('', 'Shows Restored', 'Removed shows are back in this report.');
+}
+
+function applyMonthlyReportRowDraft(row, ctx) {
+  if (!row) return row;
+  ctx = ctx || getMonthlyReportContext();
+  var draft = readMonthlyReportDraft();
+  ['reportDateLabel', 'venueName', 'teamName', 'bookedBy', 'timeRange'].forEach(function(field) {
+    var val = String(draft[monthlyReportDraftField(ctx.monthKey, ctx.type, row.id, field)] || '').trim();
+    if (val) row[field] = val;
+  });
+  row.reportDateLabel = row.reportDateLabel || monthlyReportDefaultDateLabel(row);
+  row.photoRotate = monthlyReportNormalizeRotation(draft[monthlyReportDraftField(ctx.monthKey, ctx.type, row.id, 'photoRotate')]);
+  return row;
+}
+
+function ensureMonthlyReportEditModal() {
+  var modal = document.getElementById('monthlyReportEditModal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'monthlyReportEditModal';
+  modal.className = 'monthly-report-edit-modal';
+  modal.innerHTML =
+    '<div class="monthly-report-edit-card" onclick="event.stopPropagation()">' +
+      '<button type="button" class="monthly-report-edit-close" onclick="closeMonthlyReportEditModal()">X</button>' +
+      '<div class="modal-eyebrow">Report Row</div>' +
+      '<h3>Edit this show</h3>' +
+      '<p>These changes affect only this monthly report and PDF. Original booking data stays unchanged.</p>' +
+      '<label>Date text<input id="monthlyReportEditDate" type="text" placeholder="23.05.2026 Saturday"></label>' +
+      '<label>Location<input id="monthlyReportEditVenue" type="text" placeholder="Location name"></label>' +
+      '<label>Band name<input id="monthlyReportEditTeam" type="text" placeholder="Band / team name"></label>' +
+      '<label>Booked by<input id="monthlyReportEditBookedBy" type="text" placeholder="Booking person"></label>' +
+      '<label>Time<input id="monthlyReportEditTime" type="text" placeholder="6:00 PM - 7:30 PM"></label>' +
+      '<label>Foot fall<input id="monthlyReportEditFootfall" type="number" min="0" step="1" placeholder="0"></label>' +
+      '<label>Photo rotation<select id="monthlyReportEditPhotoRotate">' +
+        '<option value="0">Straight / Auto</option>' +
+        '<option value="90">Rotate right 90</option>' +
+        '<option value="180">Rotate 180</option>' +
+        '<option value="270">Rotate left 90</option>' +
+      '</select></label>' +
+      '<label>Report photo<input id="monthlyReportEditPhotoFile" type="file" accept="image/*" onchange="previewMonthlyReportPhoto(this)"></label>' +
+      '<img id="monthlyReportEditPhotoPreview" class="monthly-report-edit-photo-preview" alt="Report photo preview" style="display:none;">' +
+      '<div id="monthlyReportEditPhotoStatus" class="monthly-report-edit-photo-status"></div>' +
+      '<div class="monthly-report-edit-actions">' +
+        '<button type="button" class="btn secondary" onclick="closeMonthlyReportEditModal()">Cancel</button>' +
+        '<button type="button" class="btn primary" id="monthlyReportEditSaveBtn" onclick="saveMonthlyReportShowEdit()">Save report edit</button>' +
+      '</div>' +
+    '</div>';
+  modal.addEventListener('click', closeMonthlyReportEditModal);
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function getMonthlyReportRowById(bookingId) {
+  var id = String(bookingId || '');
+  var row = (_monthlyReportRows || []).find(function(item) { return String(item.id) === id; });
+  if (row) return row;
+  return buildMonthlyReportRows(getMonthlyReportContext()).find(function(item) { return String(item.id) === id; });
+}
+
+function editMonthlyReportShow(bookingId) {
+  if (!requireAdminPerm('reports', 'monthly report editing')) return;
+  var row = getMonthlyReportRowById(bookingId);
+  if (!row) {
+    showToast('', 'Show Not Found', 'Refresh the monthly report and try again.');
+    return;
+  }
+  var modal = ensureMonthlyReportEditModal();
+  modal.dataset.bookingId = String(bookingId || '');
+  _monthlyReportPhotoData = null;
+  _monthlyReportPhotoPreparing = false;
+  document.getElementById('monthlyReportEditDate').value = row.reportDateLabel || monthlyReportDefaultDateLabel(row);
+  document.getElementById('monthlyReportEditVenue').value = row.venueName || '';
+  document.getElementById('monthlyReportEditTeam').value = row.teamName || '';
+  document.getElementById('monthlyReportEditBookedBy').value = row.bookedBy || '';
+  document.getElementById('monthlyReportEditTime').value = row.timeRange || '';
+  document.getElementById('monthlyReportEditFootfall').value = row.footfall || '';
+  document.getElementById('monthlyReportEditPhotoRotate').value = String(monthlyReportNormalizeRotation(row.photoRotate));
+  var fileEl = document.getElementById('monthlyReportEditPhotoFile');
+  var preview = document.getElementById('monthlyReportEditPhotoPreview');
+  var status = document.getElementById('monthlyReportEditPhotoStatus');
+  if (fileEl) fileEl.value = '';
+  if (preview) {
+    if (row.photoUrl && !isProofPlaceholder(row.photoUrl)) {
+      preview.src = row.photoUrl;
+      preview.style.display = 'block';
+    } else {
+      preview.removeAttribute('src');
+      preview.style.display = 'none';
+    }
+  }
+  if (status) {
+    status.textContent = row.photoUrl ? 'Photo already available. Choose a new one only if you want to replace it.' : 'No proof photo found. Choose a photo to add it to this report.';
+    status.style.color = row.photoUrl ? 'var(--green)' : 'var(--muted)';
+  }
+  modal.classList.add('show');
+}
+
+function closeMonthlyReportEditModal() {
+  var modal = document.getElementById('monthlyReportEditModal');
+  if (modal) modal.classList.remove('show');
+  _monthlyReportPhotoData = null;
+  _monthlyReportPhotoPreparing = false;
+}
+
+function previewMonthlyReportPhoto(input) {
+  if (!requireAdminPerm('reports', 'monthly report photo upload')) {
+    if (input) input.value = '';
+    return;
+  }
+  var file = input && input.files && input.files[0];
+  var preview = document.getElementById('monthlyReportEditPhotoPreview');
+  var status = document.getElementById('monthlyReportEditPhotoStatus');
+  var saveBtn = document.getElementById('monthlyReportEditSaveBtn');
+  _monthlyReportPhotoData = null;
+  if (!file) return;
+  _monthlyReportPhotoPreparing = true;
+  if (saveBtn) saveBtn.disabled = true;
+  if (status) { status.textContent = 'Preparing photo...'; status.style.color = 'var(--muted)'; }
+  _compressImage(file, 900, 0.62, function(dataUrl) {
+    _monthlyReportPhotoData = dataUrl;
+    _monthlyReportPhotoPreparing = false;
+    if (preview) { preview.src = dataUrl; preview.style.display = 'block'; }
+    if (status) { status.textContent = 'Photo ready. Tap Save report edit to attach it.'; status.style.color = 'var(--green)'; }
+    if (saveBtn) saveBtn.disabled = false;
+  }, function(errorMsg) {
+    _monthlyReportPhotoData = null;
+    _monthlyReportPhotoPreparing = false;
+    if (preview) { preview.removeAttribute('src'); preview.style.display = 'none'; }
+    if (status) { status.textContent = errorMsg || 'Could not prepare this photo. Choose another image.'; status.style.color = '#ff4b4b'; }
+    if (saveBtn) saveBtn.disabled = false;
+  });
+}
+
+async function saveMonthlyReportShowEdit() {
+  if (!requireAdminPerm('reports', 'monthly report editing')) return;
+  var modal = document.getElementById('monthlyReportEditModal');
+  if (!modal) return;
+  var bookingId = modal.dataset.bookingId || '';
+  if (!bookingId) return;
+  var status = document.getElementById('monthlyReportEditPhotoStatus');
+  var saveBtn = document.getElementById('monthlyReportEditSaveBtn');
+  if (_monthlyReportPhotoPreparing) {
+    if (status) { status.textContent = 'Photo is still preparing. Please wait a moment.'; status.style.color = 'var(--muted)'; }
+    return;
+  }
+  var ctx = getMonthlyReportContext();
+  var draft = readMonthlyReportDraft();
+  [
+    ['reportDateLabel', 'monthlyReportEditDate'],
+    ['venueName', 'monthlyReportEditVenue'],
+    ['teamName', 'monthlyReportEditTeam'],
+    ['bookedBy', 'monthlyReportEditBookedBy'],
+    ['timeRange', 'monthlyReportEditTime']
+  ].forEach(function(pair) {
+    var el = document.getElementById(pair[1]);
+    var key = monthlyReportDraftField(ctx.monthKey, ctx.type, bookingId, pair[0]);
+    var value = el ? el.value.trim() : '';
+    if (value) draft[key] = value;
+    else delete draft[key];
+  });
+  var footfallEl = document.getElementById('monthlyReportEditFootfall');
+  var footfallKey = monthlyReportDraftField(ctx.monthKey, ctx.type, bookingId, 'footfall');
+  var footfall = Math.max(0, Math.round(Number(footfallEl && footfallEl.value) || 0));
+  if (footfall) draft[footfallKey] = String(footfall);
+  else delete draft[footfallKey];
+  var rotateEl = document.getElementById('monthlyReportEditPhotoRotate');
+  var rotateKey = monthlyReportDraftField(ctx.monthKey, ctx.type, bookingId, 'photoRotate');
+  var rotate = monthlyReportNormalizeRotation(rotateEl && rotateEl.value);
+  if (rotate) draft[rotateKey] = String(rotate);
+  else delete draft[rotateKey];
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+  try {
+    var uploadedReportPhoto = !!_monthlyReportPhotoData;
+    if (_monthlyReportPhotoData) {
+      await dbPatch('bookings', bookingId, { proof_url: _monthlyReportPhotoData, proof_claimed: false });
+      [allBookings, myBookings].forEach(function(list) {
+        (list || []).forEach(function(b) {
+          if (String(b.id) === String(bookingId)) {
+            b.proofUrl = _monthlyReportPhotoData;
+            b.proofClaimed = false;
+          }
+        });
+      });
+    }
+    writeMonthlyReportDraft(draft);
+    closeMonthlyReportEditModal();
+    delete _monthlyReportRowsByContext[monthlyReportContextKey(ctx)];
+    generateMonthlyReportPreview(false);
+    saveLocal();
+    showToast('', 'Report Row Updated', uploadedReportPhoto ? 'Photo attached and report updated.' : 'This edit will appear in the monthly report and PDF.');
+  } catch(e) {
+    console.error('[OTS] monthly report edit save:', e);
+    if (status) { status.textContent = 'Could not save: ' + ((e && e.message) || 'Please try again.'); status.style.color = '#ff4b4b'; }
+    showToast('', 'Save Failed', (e && e.message) || 'Please try again.');
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save report edit'; }
+  }
 }
 
 function monthlyReportVenueType(venue, booking) {
@@ -6905,12 +7547,14 @@ function buildMonthlyReportRows(ctx) {
     if (!date || date.slice(0, 7) !== ctx.monthKey) return false;
     var status = normalizeStatus(b && b.status, '');
     if (['confirmed','approved','completed'].indexOf(status) === -1) return false;
+    if (isMonthlyReportShowRemoved(ctx, b && b.id)) return false;
     var venue = findVenueForBooking(b);
     return monthlyReportScopeMatches(venue, b, ctx.type);
   }).map(function(b) {
     var venue = findVenueForBooking(b);
     var date = normalizeVenueDate(b.date);
     var timeRange = venue ? formatVenueTimeRange(venue) : '-';
+    var hasProof = bookingHasProofRecord(b);
     var row = {
       id: String(b.id || ''),
       booking: b,
@@ -6924,11 +7568,12 @@ function buildMonthlyReportRows(ctx) {
       bookedBy: getBookingPersonName(b) || '',
       performanceType: b.type || '',
       performers: bookingPerformersText(b) || b.name || '',
-      photoUrl: isProofPlaceholder(b.proofUrl) ? '' : (b.proofUrl || ''),
-      hasProof: !!b.proofUrl,
+      photoUrl: isUsableProofImageUrl(b.proofUrl) ? (b.proofUrl || '') : '',
+      hasProof: hasProof,
       sortMs: bookingStartTimeMs(b)
     };
     row.footfall = monthlyReportFootfallFor(row, ctx);
+    applyMonthlyReportRowDraft(row, ctx);
     return row;
   });
   rows.sort(function(a, b) {
@@ -6952,7 +7597,7 @@ function computeMonthlyReportSummary(rows) {
       totalFootfall += row.footfall;
       footfallFilled++;
     }
-    if (!row.hasProof) missingPhotos++;
+    if (!row.photoUrl) missingPhotos++;
   });
   return {
     venues: Object.keys(venueSeen).length,
@@ -6995,14 +7640,17 @@ function renderMonthlyReportSummary(ctx, rows) {
     var notes = [];
     if (s.missingFootfall) notes.push(s.missingFootfall + ' show(s) need footfall before the report looks complete.');
     if (s.missingPhotos) notes.push(s.missingPhotos + ' show(s) do not have proof photos yet.');
+    var removedShows = monthlyReportRemovedCount(ctx);
+    if (removedShows) notes.push(removedShows + ' show(s) removed from this report.' + (hasAdminPerm('reports') ? ' <button type="button" class="monthly-report-restore-btn" onclick="restoreMonthlyReportShows()">Restore removed shows</button>' : ''));
     var hiddenUncategorized = countMonthlyReportHiddenUncategorized(ctx);
     if (hiddenUncategorized) notes.push(hiddenUncategorized + ' old show(s) are hidden because their venue type is not set. Public is only visibility; set GCC/Metro/Foundation/Private in Venue Manager.');
     if (!rows.length) notes.push('No confirmed shows found for ' + otsEscapeHtml(ctx.typeLabel) + ' in ' + otsEscapeHtml(monthLabelFromKey(ctx.monthKey, false)) + '.');
-    warn.innerHTML = notes.length ? notes.map(function(n){ return '<div>' + otsEscapeHtml(n) + '</div>'; }).join('') : '<div class="ok">Report data looks complete.</div>';
+    warn.innerHTML = notes.length ? notes.map(function(n){ return '<div>' + (String(n).indexOf('<button') > -1 ? n : otsEscapeHtml(n)) + '</div>'; }).join('') : '<div class="ok">Report data looks complete.</div>';
   }
 }
 
 function setMonthlyReportFootfall(bookingId, value) {
+  if (!requireAdminPerm('reports', 'monthly report editing')) return;
   var ctx = getMonthlyReportContext();
   var draft = readMonthlyReportDraft();
   var key = monthlyReportDraftField(ctx.monthKey, ctx.type, bookingId, 'footfall');
@@ -7013,6 +7661,7 @@ function setMonthlyReportFootfall(bookingId, value) {
   _monthlyReportRows.forEach(function(row) {
     if (String(row.id) === String(bookingId)) row.footfall = n;
   });
+  if (_monthlyReportRows.length) cacheMonthlyReportRows(ctx, _monthlyReportRows);
   renderMonthlyReportSummary(ctx, _monthlyReportRows);
 }
 
@@ -7030,6 +7679,39 @@ function showMonthlyReportRefreshingNotice(message) {
   if (warnings) warnings.innerHTML = '<div class="ok">' + otsEscapeHtml(message || 'Refreshing live report data...') + '</div>';
 }
 
+function renderMonthlyReportRows(ctx, rows) {
+  var preview = document.getElementById('monthlyReportPreview');
+  if (!preview) return;
+  var canEditReports = hasAdminPerm('reports');
+  rows = rows || [];
+  _monthlyReportRows = rows.slice();
+  _monthlyReportLastContextKey = monthlyReportContextKey(ctx);
+  renderMonthlyReportSummary(ctx, _monthlyReportRows);
+  if (!_monthlyReportRows.length) {
+    preview.innerHTML = '<div class="table-empty">No confirmed shows found for this report.</div>';
+    return;
+  }
+  cacheMonthlyReportRows(ctx, _monthlyReportRows);
+  preview.innerHTML =
+    '<div class="monthly-report-table-head">' +
+      '<div>Date</div><div>Venue</div><div>Team</div><div>Time</div><div>Footfall</div><div>Photo</div>' +
+    '</div>' +
+    _monthlyReportRows.map(function(row) {
+      var photoLabel = row.photoUrl ? 'Available' : 'Missing';
+      var rowActions = canEditReports
+        ? '<div class="monthly-report-row-actions"><button type="button" class="monthly-report-edit-btn" onclick="editMonthlyReportShow(\'' + otsJsString(row.id) + '\')">Edit</button><button type="button" class="monthly-report-remove-btn" onclick="removeMonthlyReportShow(\'' + otsJsString(row.id) + '\')">Remove this show</button></div>'
+        : '';
+      return '<div class="monthly-report-row">' +
+        '<div><strong>' + otsEscapeHtml(row.reportDateLabel || monthlyReportDefaultDateLabel(row)) + '</strong>' + rowActions + '</div>' +
+        '<div><strong>' + otsEscapeHtml(row.venueName) + '</strong><span>' + otsEscapeHtml(row.venueType || 'Venue') + '</span></div>' +
+        '<div><strong>' + otsEscapeHtml(row.teamName) + '</strong><span>Booked by ' + otsEscapeHtml(row.bookedBy || '-') + '</span></div>' +
+        '<div>' + otsEscapeHtml(row.timeRange) + '</div>' +
+        '<div><input type="number" min="0" step="1" value="' + otsEscapeHtml(row.footfall || '') + '" placeholder="0" oninput="setMonthlyReportFootfall(\'' + otsJsString(row.id) + '\', this.value)" ' + (canEditReports ? '' : 'disabled') + '></div>' +
+        '<div><span class="' + (row.photoUrl ? 'report-photo-ok' : 'report-photo-missing') + '">' + photoLabel + '</span>' + (row.photoRotate ? '<span>Rotate ' + row.photoRotate + '</span>' : '') + '</div>' +
+      '</div>';
+    }).join('');
+}
+
 function generateMonthlyReportPreview(allowRefresh) {
   var preview = document.getElementById('monthlyReportPreview');
   if (!preview) return;
@@ -7038,17 +7720,18 @@ function generateMonthlyReportPreview(allowRefresh) {
   syncMonthlyReportTitle(initialCtx);
   initialCtx = getMonthlyReportContext();
   var contextKey = monthlyReportContextKey(initialCtx);
+  var cachedRows = getCurrentMonthlyReportRows(initialCtx);
   if (_adminDataLoading && currentAdminTab === 'reports') {
-    if (_monthlyReportRows.length && _monthlyReportLastContextKey === contextKey) {
-      showMonthlyReportRefreshingNotice('Refreshing live report data...');
+    if (cachedRows.length) {
+      prepareAndRenderMonthlyReportRows(initialCtx, cachedRows, 'Preparing report photos...');
     } else {
       renderMonthlyReportLoading('Loading live report data...');
     }
     return;
   }
   if (adminLoggedIn && currentAdminTab === 'reports' && _monthlyReportLoadedMonthKey !== initialCtx.monthKey && _monthlyReportLoadFailedMonthKey !== initialCtx.monthKey) {
-    if (_monthlyReportRows.length && _monthlyReportLastContextKey === contextKey) {
-      showMonthlyReportRefreshingNotice('Loading full ' + monthLabelFromKey(initialCtx.monthKey, false) + ' report data...');
+    if (cachedRows.length) {
+      prepareAndRenderMonthlyReportRows(initialCtx, cachedRows, 'Preparing report photos...');
     } else {
       renderMonthlyReportLoading('Loading full ' + monthLabelFromKey(initialCtx.monthKey, false) + ' report data...');
     }
@@ -7061,8 +7744,8 @@ function generateMonthlyReportPreview(allowRefresh) {
     return;
   }
   if (allowRefresh && adminLoggedIn && currentAdminTab === 'reports' && !_adminDataLoading) {
-    if (_monthlyReportRows.length && _monthlyReportLastContextKey === contextKey) {
-      showMonthlyReportRefreshingNotice('Refreshing live report data...');
+    if (cachedRows.length) {
+      prepareAndRenderMonthlyReportRows(initialCtx, cachedRows, 'Preparing report photos...');
     } else {
       renderMonthlyReportLoading('Loading report data...');
     }
@@ -7073,45 +7756,234 @@ function generateMonthlyReportPreview(allowRefresh) {
     return;
   }
   var ctx = initialCtx;
-  _monthlyReportRows = buildMonthlyReportRows(ctx);
-  _monthlyReportLastContextKey = monthlyReportContextKey(ctx);
-  renderMonthlyReportSummary(ctx, _monthlyReportRows);
-  if (!_monthlyReportRows.length) {
-    preview.innerHTML = '<div class="table-empty">No confirmed shows found for this report.</div>';
+  var nextRows = buildMonthlyReportRows(ctx);
+  if (!nextRows.length && cachedRows.length) {
+    prepareAndRenderMonthlyReportRows(ctx, cachedRows, 'Preparing report photos...');
     return;
   }
-  preview.innerHTML =
-    '<div class="monthly-report-table-head">' +
-      '<div>Date</div><div>Venue</div><div>Team</div><div>Time</div><div>Footfall</div><div>Photo</div>' +
-    '</div>' +
-    _monthlyReportRows.map(function(row) {
-      var photoLabel = row.hasProof ? 'Available' : 'Missing';
-      return '<div class="monthly-report-row">' +
-        '<div><strong>' + otsEscapeHtml(monthlyReportDisplayDate(row.date)) + '</strong><span>' + otsEscapeHtml(row.dayName) + '</span></div>' +
-        '<div><strong>' + otsEscapeHtml(row.venueName) + '</strong><span>' + otsEscapeHtml(row.venueType || 'Venue') + '</span></div>' +
-        '<div><strong>' + otsEscapeHtml(row.teamName) + '</strong><span>Booked by ' + otsEscapeHtml(row.bookedBy || '-') + '</span></div>' +
-        '<div>' + otsEscapeHtml(row.timeRange) + '</div>' +
-        '<div><input type="number" min="0" step="1" value="' + otsEscapeHtml(row.footfall || '') + '" placeholder="0" oninput="setMonthlyReportFootfall(\'' + otsJsString(row.id) + '\', this.value)"></div>' +
-        '<div><span class="' + (row.hasProof ? 'report-photo-ok' : 'report-photo-missing') + '">' + photoLabel + '</span></div>' +
-      '</div>';
-    }).join('');
+  prepareAndRenderMonthlyReportRows(ctx, nextRows, nextRows.length ? 'Preparing report photos...' : '');
+}
+
+function monthlyReportSetRowPhoto(row, proofUrl) {
+  if (!row) return row;
+  proofUrl = String(proofUrl || '').trim();
+  if (isUsableProofImageUrl(proofUrl)) {
+    row.photoUrl = proofUrl;
+    row.hasProof = true;
+    if (row.booking) row.booking.proofUrl = proofUrl;
+  } else {
+    row.photoUrl = '';
+    row.hasProof = false;
+  }
+  return row;
+}
+
+function monthlyReportProofQueryWithTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise(function(resolve) {
+      setTimeout(function() { resolve([]); }, ms || 8000);
+    })
+  ]);
+}
+
+async function fetchMonthlyReportProofMap(ids) {
+  ids = Array.from(new Set((ids || []).map(function(id) { return String(id || '').trim(); }).filter(Boolean)));
+  var out = {};
+  for (var start = 0; start < ids.length; start += 25) {
+    var batch = ids.slice(start, start + 25);
+    var placeholders = batch.map(function(_, i) { return '$' + (i + 1); }).join(',');
+    try {
+      var rows = await monthlyReportProofQueryWithTimeout(
+        neonSQL('SELECT id, proof_url FROM bookings WHERE id::TEXT IN (' + placeholders + ')', batch),
+        8000
+      );
+      (rows || []).forEach(function(r) {
+        var id = String(r && r.id || '');
+        var proof = r && r.proof_url ? String(r.proof_url) : '';
+        if (id && isUsableProofImageUrl(proof)) out[id] = proof;
+      });
+    } catch(e) {
+      console.warn('[OTS] monthly report proof batch failed:', e && (e.message || e));
+    }
+  }
+  return out;
 }
 
 async function hydrateMonthlyReportPhotos(rows) {
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    var b = row.booking;
-    if (!b || !isProofPlaceholder(b.proofUrl)) continue;
+  rows = rows || [];
+  var needsLookup = [];
+  rows.forEach(function(row) {
+    if (!row || row.photoUrl) return;
+    var b = row.booking || {};
+    if (row.hasProof || isProofPlaceholder(b.proofUrl)) needsLookup.push(row.id || b.id);
+  });
+  if (!needsLookup.length) {
+    rows.forEach(function(row) {
+      if (row && !isUsableProofImageUrl(row.photoUrl)) monthlyReportSetRowPhoto(row, '');
+    });
+    return rows;
+  }
+  var proofMap = await fetchMonthlyReportProofMap(needsLookup);
+  rows.forEach(function(row) {
+    if (!row) return;
+    if (isUsableProofImageUrl(row.photoUrl)) {
+      monthlyReportSetRowPhoto(row, row.photoUrl);
+      return;
+    }
+    monthlyReportSetRowPhoto(row, proofMap[String(row.id || '')] || '');
+  });
+  return rows;
+}
+
+async function prepareMonthlyReportRows(ctx, rows) {
+  rows = rows || [];
+  if (!rows.length) return rows;
+  await hydrateMonthlyReportPhotos(rows);
+  await verifyMonthlyReportPhotos(rows, { timeoutMs: 4500 });
+  return rows;
+}
+
+async function prepareAndRenderMonthlyReportRows(ctx, rows, message) {
+  rows = rows || [];
+  if (!rows.length) {
+    renderMonthlyReportRows(ctx, rows);
+    return rows;
+  }
+  var seq = ++_monthlyReportPrepareSeq;
+  var contextKey = monthlyReportContextKey(ctx);
+  if (message) renderMonthlyReportLoading(message);
+  try {
+    await prepareMonthlyReportRows(ctx, rows);
+  } catch(e) {
+    console.warn('[OTS] monthly report prepare failed:', e && (e.message || e));
+    rows.forEach(function(row) {
+      if (row && !isUsableProofImageUrl(row.photoUrl)) monthlyReportSetRowPhoto(row, '');
+    });
+  }
+  if (seq !== _monthlyReportPrepareSeq || currentAdminTab !== 'reports' || monthlyReportContextKey(getMonthlyReportContext()) !== contextKey) return rows;
+  renderMonthlyReportRows(ctx, rows);
+  return rows;
+}
+
+function refreshMonthlyReportPreviewPhotos(ctx, rows) {
+  return prepareAndRenderMonthlyReportRows(ctx, rows || [], 'Preparing report photos...');
+}
+
+function monthlyReportDataUrlToBlob(dataUrl) {
+  var parts = String(dataUrl || '').split(',');
+  var meta = parts[0] || '';
+  var b64 = parts[1] || '';
+  var mime = (meta.match(/data:([^;]+)/) || [])[1] || 'image/jpeg';
+  var bin = atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+async function monthlyReportPhotoBlob(url) {
+  url = String(url || '');
+  if (!url) return null;
+  if (/^data:image\//i.test(url)) return monthlyReportDataUrlToBlob(url);
+  var response = await fetch(url, { mode:'cors' });
+  if (!response.ok) throw new Error('Photo fetch failed');
+  return response.blob();
+}
+
+async function verifyMonthlyReportPhotos(rows, options) {
+  options = options || {};
+  var timeoutMs = Math.max(1500, Number(options.timeoutMs) || 4500);
+  function canLoadImage(url) {
+    return new Promise(function(resolve) {
+      var img = new Image();
+      img.onload = function(){ resolve(true); };
+      img.onerror = function(){ resolve(false); };
+      img.src = url;
+      setTimeout(function(){ resolve(false); }, timeoutMs);
+    });
+  }
+  await Promise.all((rows || []).map(async function(row) {
+    if (!row || !row.photoUrl) return;
     try {
-      var proof = await fetchBookingProofUrl(b.id);
-      if (proof) {
-        b.proofUrl = proof;
-        row.photoUrl = proof;
-        row.hasProof = true;
+      if (!(await canLoadImage(row.photoUrl))) {
+        row.photoUrl = '';
+        row.hasProof = false;
       }
     } catch(e) {
-      console.warn('[OTS] report proof load failed for booking', b && b.id, e);
+      console.warn('[OTS] report proof image verify failed for booking', row && row.id, e && (e.message || e));
+      row.photoUrl = '';
+      row.hasProof = false;
     }
+  }));
+  return rows;
+}
+
+function monthlyReportJpegOrientationFromBuffer(buffer) {
+  var view = new DataView(buffer);
+  if (view.byteLength < 4 || view.getUint16(0, false) !== 0xFFD8) return 1;
+  var offset = 2;
+  while (offset < view.byteLength) {
+    var marker = view.getUint16(offset, false);
+    offset += 2;
+    if (marker === 0xFFE1) {
+      var length = view.getUint16(offset, false);
+      offset += 2;
+      if (view.getUint32(offset, false) !== 0x45786966) return 1;
+      var tiff = offset + 6;
+      var little = view.getUint16(tiff, false) === 0x4949;
+      var firstIfd = view.getUint32(tiff + 4, little);
+      var entries = view.getUint16(tiff + firstIfd, little);
+      for (var i = 0; i < entries; i++) {
+        var entry = tiff + firstIfd + 2 + (i * 12);
+        if (view.getUint16(entry, little) === 0x0112) return view.getUint16(entry + 8, little) || 1;
+      }
+      return 1;
+    }
+    if ((marker & 0xFF00) !== 0xFF00) break;
+    offset += view.getUint16(offset, false);
+  }
+  return 1;
+}
+
+async function normalizeMonthlyReportPhoto(url, manualRotation) {
+  try {
+    manualRotation = monthlyReportNormalizeRotation(manualRotation);
+    if (!url || typeof createImageBitmap !== 'function') return url;
+    var blob = await monthlyReportPhotoBlob(url);
+    if (!blob) return url;
+    var isJpeg = /^image\/jpe?g$/i.test(blob.type || '');
+    var orientation = isJpeg ? monthlyReportJpegOrientationFromBuffer(await blob.arrayBuffer()) : 1;
+    if ([3, 6, 8].indexOf(orientation) === -1 && !manualRotation) return url;
+    var bitmap = isJpeg ? await createImageBitmap(blob, { imageOrientation:'none' }) : await createImageBitmap(blob);
+    var exifRotation = orientation === 3 ? 180 : orientation === 6 ? 90 : orientation === 8 ? 270 : 0;
+    var totalRotation = monthlyReportNormalizeRotation(exifRotation + manualRotation);
+    var swap = totalRotation === 90 || totalRotation === 270;
+    var canvas = document.createElement('canvas');
+    canvas.width = swap ? bitmap.height : bitmap.width;
+    canvas.height = swap ? bitmap.width : bitmap.height;
+    var ctx = canvas.getContext('2d');
+    if (totalRotation === 180) {
+      ctx.translate(canvas.width, canvas.height);
+      ctx.rotate(Math.PI);
+    } else if (totalRotation === 90) {
+      ctx.translate(canvas.width, 0);
+      ctx.rotate(Math.PI / 2);
+    } else if (totalRotation === 270) {
+      ctx.translate(0, canvas.height);
+      ctx.rotate(-Math.PI / 2);
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    try { bitmap.close(); } catch(e) {}
+    return canvas.toDataURL('image/jpeg', 0.9);
+  } catch(e) {
+    console.warn('[OTS] report photo orientation normalize skipped:', e && (e.message || e));
+    return url;
+  }
+}
+
+async function normalizeMonthlyReportPhotos(rows) {
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].photoUrl) rows[i].photoUrl = await normalizeMonthlyReportPhoto(rows[i].photoUrl, rows[i].photoRotate);
   }
 }
 
@@ -7136,17 +8008,17 @@ function buildMonthlyReportPrintHtml(ctx, rows) {
     var weekHtml = week !== prevWeek ? '<div class="report-week-title">' + otsEscapeHtml(week) + '</div>' : '';
     prevWeek = week;
     var photo = row.photoUrl
-      ? '<img src="' + otsEscapeHtml(row.photoUrl) + '" alt="' + otsEscapeHtml(row.teamName) + ' at ' + otsEscapeHtml(row.venueName) + '">'
+      ? '<img class="report-proof-photo" src="' + otsEscapeHtml(row.photoUrl) + '" alt="' + otsEscapeHtml(row.teamName) + ' at ' + otsEscapeHtml(row.venueName) + '">'
       : '<div class="report-photo-empty">Photo not attached</div>';
     return '<section class="report-page report-show-page">' +
       logoHtml +
       weekHtml +
       '<div class="report-show-line">' +
-        '<strong>' + (idx + 1) + '. ' + otsEscapeHtml(monthlyReportDisplayDate(row.date)) + ' ' + otsEscapeHtml(String(row.dayName).toUpperCase()) + '</strong>' +
-        '<span>' + otsEscapeHtml(row.venueName) + '</span>' +
-        '<span>' + otsEscapeHtml(row.timeRange) + '</span>' +
-        '<span>' + otsEscapeHtml(row.teamName) + '</span>' +
-        '<span>' + otsEscapeHtml(row.footfall || 0) + ' Footfall</span>' +
+        '<div><strong>' + (idx + 1) + '. Date :</strong> <span>' + otsEscapeHtml(row.reportDateLabel || monthlyReportDefaultDateLabel(row)) + '</span></div>' +
+        '<div><strong>Location :</strong> <span>' + otsEscapeHtml(row.venueName) + '</span></div>' +
+        '<div><strong>Band name :</strong> <span>' + otsEscapeHtml(row.teamName) + '</span></div>' +
+        '<div><strong>Time :</strong> <span>' + otsEscapeHtml(row.timeRange) + '</span></div>' +
+        '<div><strong>Foot fall :</strong> <span>' + otsEscapeHtml(row.footfall || 0) + '</span></div>' +
       '</div>' +
       '<div class="report-photo-box">' + photo + '</div>' +
     '</section>';
@@ -7161,8 +8033,8 @@ function buildMonthlyReportPrintHtml(ctx, rows) {
     '.cover{justify-content:center;align-items:center;text-align:center;}.cover h1{font-size:74px;line-height:1.05;margin:0;text-transform:uppercase;letter-spacing:.02em;}.cover p{font-size:22px;margin:22px 0 0;color:#555;}' +
     '.summary h2,.divider h2{font-size:52px;margin:110px 0 28px;text-transform:uppercase;}.summary-table{width:74%;margin:auto;border-collapse:collapse;font-size:26px;}.summary-table td{border:3px solid #111;padding:18px 22px;}.summary-table td:last-child{text-align:right;font-weight:800;}' +
     '.divider{justify-content:center;align-items:center;text-align:center;background:#f6f7fb;}.divider h2{margin:0;font-size:58px;max-width:900px;}' +
-    '.report-week-title{font-size:42px;font-weight:900;margin:92px 0 18px;text-transform:uppercase;}.report-show-line{font-size:22px;line-height:1.45;display:flex;gap:14px;flex-wrap:wrap;margin:82px 0 24px;align-items:center;}.report-show-line span:not(:last-child)::after{content:"/";margin-left:14px;color:#777;}' +
-    '.report-photo-box{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;border:2px solid #e3e6ee;background:#fafafa;}.report-photo-box img{max-width:100%;max-height:100%;object-fit:contain;}.report-photo-empty{font-size:28px;color:#999;}' +
+    '.report-week-title{font-size:42px;font-weight:900;margin:92px 0 18px;text-transform:uppercase;}.report-show-line{font-size:22px;line-height:1.45;display:grid;grid-template-columns:1fr 1fr;gap:8px 34px;margin:82px 0 24px;align-items:start;}.report-show-line div{min-width:0;}.report-show-line strong{font-weight:900;}.report-show-line span{font-weight:500;}' +
+    '.report-photo-box{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;border:2px solid #e3e6ee;background:#fafafa;}.report-proof-photo{max-width:100%;max-height:100%;object-fit:contain;image-orientation:from-image;transform:rotate(0deg);}.report-photo-empty{font-size:28px;color:#999;}' +
     '@media print{.report-page{width:100vw;height:100vh;}}' +
     '</style></head><body>' +
     '<section class="report-page cover">' + logoHtml + '<h1>' + otsEscapeHtml(ctx.title) + '</h1><p>' + otsEscapeHtml(ctx.typeLabel) + ' / Generated ' + otsEscapeHtml(generated) + '</p></section>' +
@@ -7179,30 +8051,66 @@ function buildMonthlyReportPrintHtml(ctx, rows) {
     '</body></html>';
 }
 
-async function exportMonthlyReportPDF() {
-  if (!requireAdminPerm('reports', 'monthly report export')) return;
+async function openMonthlyReportWindow(autoPrint) {
+  if (!requireAdminPerm('reports', autoPrint ? 'monthly report download' : 'monthly report view')) return;
   initMonthlyReportControls();
   var ctx = getMonthlyReportContext();
-  var rows = buildMonthlyReportRows(ctx);
+  var rows = getCurrentMonthlyReportRows(ctx);
+  if (!rows.length) rows = buildMonthlyReportRows(ctx);
+  if (rows.length) {
+    renderMonthlyReportRows(ctx, rows);
+  }
   if (!rows.length) {
     showToast('', 'No Report Data', 'No confirmed shows found for this month and type.');
     return;
   }
-  showToast('', 'Preparing Report', 'Loading proof photos for the PDF preview...');
-  await hydrateMonthlyReportPhotos(rows);
-  var html = buildMonthlyReportPrintHtml(ctx, rows);
   var win = window.open('', '_blank');
   if (!win) {
-    showToast('', 'Popup Blocked', 'Please allow popups, then try Print / Save PDF again.');
+    showToast('', 'Popup Blocked', 'Chrome blocked the report window. Allow popups for this site once, then tap ' + (autoPrint ? 'Download Report' : 'View Report') + ' again.');
     return;
   }
   win.document.open();
-  win.document.write(html);
+  win.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Preparing Report</title><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#12101f;color:#fff;font-family:Arial,sans-serif;text-align:center}.box{max-width:520px;padding:32px}.label{color:#ff8a35;letter-spacing:.16em;text-transform:uppercase;font-size:13px;font-weight:800}.title{font-size:28px;font-weight:800;margin:14px 0 8px}.sub{color:#b7b1c9;font-size:15px;line-height:1.5}</style></head><body><div class="box"><div class="label">OTS Report</div><div class="title">Preparing monthly report...</div><div class="sub">' + (autoPrint ? 'Loading proof photos. Chrome will open the PDF save window automatically.' : 'Loading proof photos. The report preview will open here.') + '</div></div></body></html>');
   win.document.close();
-  setTimeout(function() {
-    try { win.focus(); win.print(); } catch(e) {}
-  }, 900);
-  logAdminAction('monthly_report_export', ctx.title + ' / ' + rows.length + ' shows').catch(function(){});
+  showToast('', 'Preparing Report', autoPrint ? 'Chrome will open the PDF save window after photos load.' : 'Opening report preview after photos load.');
+  try {
+    await hydrateMonthlyReportPhotos(rows);
+    await verifyMonthlyReportPhotos(rows);
+    await normalizeMonthlyReportPhotos(rows);
+    var html = buildMonthlyReportPrintHtml(ctx, rows);
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  } catch(e) {
+    try {
+      win.document.open();
+      win.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Report Failed</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#222}.err{color:#b42318;font-weight:700}</style></head><body><h1>Report could not be prepared</h1><p class="err">Please go back to the app and try again.</p></body></html>');
+      win.document.close();
+    } catch(_e) {}
+    showToast('', 'Report Failed', 'Could not prepare the PDF report. Please try again.');
+    console.error('[OTS] monthly report export:', e);
+    return;
+  }
+  if (autoPrint) {
+    setTimeout(function() {
+      try { win.focus(); win.print(); } catch(e) {}
+    }, 900);
+  } else {
+    try { win.focus(); } catch(e) {}
+  }
+  logAdminAction(autoPrint ? 'monthly_report_download' : 'monthly_report_view', ctx.title + ' / ' + rows.length + ' shows').catch(function(){});
+}
+
+async function viewMonthlyReport() {
+  return openMonthlyReportWindow(false);
+}
+
+async function downloadMonthlyReportPDF() {
+  return openMonthlyReportWindow(true);
+}
+
+async function exportMonthlyReportPDF() {
+  return downloadMonthlyReportPDF();
 }
 
 // =======================================
@@ -7904,23 +8812,33 @@ var _createAdminSaving = false;
 var _adminAccessSaving = false;
 
 var ADMIN_PERMISSION_DEFS = [
-  { key:'slots',   label:'Slot approvals', desc:'Approve, reject and cancel slot bookings.' },
-  { key:'venues',  label:'Venues',         desc:'Add, edit, import, open/close and delete venues.' },
-  { key:'claims',  label:'Claims',         desc:'Approve or reject performance photo claims.' },
+  { key:'slots',   label:'Slot approvals', desc:'Approve/reject/cancel bookings and edit booking details.' },
+  { key:'venues',  label:'Venues',         desc:'Add, edit, import, classify, open/close and delete venues.' },
+  { key:'claims',  label:'Claims & show rescue', desc:'Approve claims, give special-show 1 point, emergency upload/show credit and restore follow-ups.' },
   { key:'photos',  label:'Front photos',   desc:'Upload, reorder, rename and remove home page photos.' },
-  { key:'ads',     label:'Community news', desc:'Create and manage event ads and news on the home page.' },
-  { key:'members', label:'Members',        desc:'Add/edit members, approve zones and activate accounts.' },
-  { key:'points',  label:'Points',         desc:'Manage monthly zone reports, CSV point imports, volunteer points and corrections.' },
-  { key:'reports', label:'Monthly reports', desc:'Generate and export GCC/Foundation monthly reports.' }
+  { key:'ads',     label:'Community news', desc:'Create and manage event ads, announcements and news images.' },
+  { key:'members', label:'Members & zones', desc:'Add/import/edit members, approve zones and activate accounts.' },
+  { key:'points',  label:'Points & zone reports', desc:'Manage monthly zone reports, CSV point imports, volunteer points and withdrawals.' },
+  { key:'reports', label:'Monthly reports', desc:'Edit report rows/photos/footfall, remove shows and view/download PDFs.' },
+  { key:'errors',  label:'Error reports',  desc:'Review technical bug reports and send test diagnostics.' }
 ];
+function normalizeAdminRole(role) {
+  var r = String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '');
+  if (r === 'superadmin' || r === 'superadministrator' || r === 'super') return 'superadmin';
+  return 'admin';
+}
 function parseAdminPermissions(value) {
   if (!value) return {};
   if (typeof value === 'object') return value || {};
   try { return JSON.parse(value || '{}') || {}; } catch(e) { return {}; }
 }
 function hasAdminPerm(key) {
-  if (currentAdminRole === 'superadmin') return true;
+  if (isCurrentSuperAdmin()) return true;
   return !!(currentAdminPermissions && currentAdminPermissions[key]);
+}
+function isCurrentSuperAdmin() {
+  currentAdminRole = normalizeAdminRole(currentAdminRole);
+  return currentAdminRole === 'superadmin';
 }
 function requireAdminPerm(key, label) {
   if (hasAdminPerm(key)) return true;
@@ -7931,7 +8849,7 @@ function getCheckedAdminPermissions(prefix) {
   var perms = {};
   ADMIN_PERMISSION_DEFS.forEach(function(def) {
     var el = document.getElementById(prefix + def.key);
-    perms[def.key] = !!(el && el.checked);
+    perms[def.key] = isAdminPermissionChecked(el);
   });
   return perms;
 }
@@ -7939,11 +8857,11 @@ function setCheckedAdminPermissions(prefix, perms) {
   perms = parseAdminPermissions(perms);
   ADMIN_PERMISSION_DEFS.forEach(function(def) {
     var el = document.getElementById(prefix + def.key);
-    if (el) el.checked = !!perms[def.key];
+    setAdminPermissionChecked(el, !!perms[def.key]);
   });
 }
 function adminPermissionSummary(perms, role) {
-  if (role === 'superadmin') return 'Full access';
+  if (normalizeAdminRole(role) === 'superadmin') return 'Full access';
   perms = parseAdminPermissions(perms);
   var names = ADMIN_PERMISSION_DEFS.filter(function(def){ return !!perms[def.key]; }).map(function(def){ return def.label; });
   return names.length ? names.join(', ') : 'View only';
@@ -7951,12 +8869,70 @@ function adminPermissionSummary(perms, role) {
 function renderPermissionChecks(prefix, selected) {
   selected = parseAdminPermissions(selected);
   return '<div class="admin-permission-grid">' + ADMIN_PERMISSION_DEFS.map(function(def) {
-    return '<label class="admin-permission-card">' +
-      '<input type="checkbox" id="' + prefix + def.key + '" ' + (selected[def.key] ? 'checked' : '') + '>' +
-      '<span><strong>' + def.label + '</strong>' +
-      '<span>' + def.desc + '</span></span>' +
-    '</label>';
+    var checked = !!selected[def.key];
+    return '<div class="admin-permission-card ' + (checked ? 'is-checked' : '') + '" ' +
+      'id="' + prefix + def.key + '" role="checkbox" aria-checked="' + (checked ? 'true' : 'false') + '" ' +
+      'data-checked="' + (checked ? 'true' : 'false') + '" data-permission-key="' + otsEscapeHtml(def.key) + '" ' +
+      'tabindex="0" ' +
+      'onpointerdown="return guardAdminPermissionPointer(event)" onmousedown="return guardAdminPermissionPointer(event)" ' +
+      'onkeydown="return handleAdminPermissionKey(event,this)" onclick="return toggleAdminPermissionCard(event,this)">' +
+      '<span class="admin-permission-box" aria-hidden="true"></span>' +
+      '<span class="admin-permission-copy"><strong>' + otsEscapeHtml(def.label) + '</strong>' +
+      '<span>' + otsEscapeHtml(def.desc) + '</span></span>' +
+    '</div>';
   }).join('') + '</div>';
+}
+
+function isAdminPermissionChecked(el) {
+  if (!el) return false;
+  if (el.type === 'checkbox') return !!el.checked;
+  return el.getAttribute('aria-checked') === 'true' || el.getAttribute('data-checked') === 'true';
+}
+
+function setAdminPermissionChecked(el, checked) {
+  if (!el) return;
+  checked = !!checked;
+  if (el.type === 'checkbox') {
+    el.checked = checked;
+    return;
+  }
+  el.setAttribute('aria-checked', checked ? 'true' : 'false');
+  el.setAttribute('data-checked', checked ? 'true' : 'false');
+  el.classList.toggle('is-checked', checked);
+}
+
+function toggleAdminPermissionCard(event, el) {
+  if (event) {
+    try {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    } catch(e) {}
+  }
+  setAdminPermissionChecked(el, !isAdminPermissionChecked(el));
+  try {
+    if (document.activeElement && document.activeElement !== el && document.activeElement.blur) {
+      document.activeElement.blur();
+    }
+    if (el && el.focus) el.focus({ preventScroll:true });
+  } catch(e) {}
+  return false;
+}
+
+function guardAdminPermissionPointer(event) {
+  if (event) {
+    try {
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    } catch(e) {}
+  }
+  return true;
+}
+
+function handleAdminPermissionKey(event, el) {
+  var key = event && (event.key || event.code);
+  if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return true;
+  return toggleAdminPermissionCard(event, el);
 }
 
 function handleLogoClick() {
@@ -7970,8 +8946,7 @@ function handleLogoClick() {
     }
     // Re-verify session from localStorage in case in-memory var was reset
     if (!adminLoggedIn && _hasAdminSession()) {
-      adminLoggedIn = true;
-      document.getElementById('logoutBtn').classList.add('show');
+      restoreAdminSession();
     }
     if (adminLoggedIn) {
       // Hide member login overlay if showing, go straight to admin
@@ -8089,7 +9064,7 @@ async function doLogin() {
         ]);
         if (row && String(row.password || '').trim() === p) {
           authenticated = true;
-          role = row.role || 'admin';
+          role = normalizeAdminRole(row.role || 'admin');
           permissions = parseAdminPermissions(row.permissions);
         }
       } catch(e) {
@@ -8103,7 +9078,7 @@ async function doLogin() {
   if (authenticated) {
     adminLoggedIn = true;
     currentAdminUsername = u;
-    currentAdminRole = role;
+    currentAdminRole = normalizeAdminRole(role);
     currentAdminPermissions = permissions;
     _saveAdminSession();
     err.classList.remove('show');
@@ -8253,58 +9228,121 @@ async function updateAdminNotifCount() {
 }
 
 async function loadSuperAdminData() {
-  if (currentAdminRole !== 'superadmin') return;
-  document.getElementById('sa-admins-list').innerHTML = '<div style="color:var(--muted);font-size:.85rem;">Loading...</div>';
-  document.getElementById('sa-logs-list').innerHTML = '<div style="color:var(--muted);font-size:.85rem;">Loading...</div>';
+  currentAdminRole = normalizeAdminRole(currentAdminRole);
+  if (!isCurrentSuperAdmin()) {
+    _applySuperAdminVisibility();
+    showToast('', 'Super Admin Only', 'Please log in with a Super Admin account.');
+    return;
+  }
+  var adminsEl = document.getElementById('sa-admins-list');
+  var logsEl = document.getElementById('sa-logs-list');
+  if (adminsEl) adminsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;">Loading admin accounts...</div>';
+  if (logsEl) logsEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;">Loading activity...</div>';
   try {
     try {
+      await neonSQL("ALTER TABLE admins ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT '{}'");
+      await neonSQL("ALTER TABLE admins ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true");
+      await neonSQL("ALTER TABLE admins ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()");
       _saAdmins = await neonSQL("SELECT id,username,role,active,created_at,permissions FROM admins ORDER BY created_at");
     } catch(colErr) {
-      await neonSQL("ALTER TABLE admins ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT '{}'");
+      console.warn('[OTS] super admin account load retry:', colErr && (colErr.message || colErr));
       _saAdmins = await neonSQL("SELECT id,username,role,active,created_at,permissions FROM admins ORDER BY created_at");
     }
     _renderSAAdmins();
   } catch(e) {
-    document.getElementById('sa-admins-list').innerHTML = '<div style="color:var(--muted);">Could not load admins.</div>';
+    console.error('[OTS] super admin account load failed:', e);
+    if (adminsEl) adminsEl.innerHTML = '<div style="color:#ff8a35;line-height:1.6;">Could not load admin accounts. Check internet and tap Refresh. <br><span style="color:var(--muted);font-size:.78rem;">' + otsEscapeHtml((e && e.message) || 'Admin data request failed') + '</span></div>';
   }
   try {
     var logs = await neonSQL("SELECT admin_username,action,details,created_at FROM admin_logs ORDER BY created_at DESC LIMIT 150");
     _renderSALogs(logs);
   } catch(e) {
-    document.getElementById('sa-logs-list').innerHTML = '<div style="color:var(--muted);">Could not load logs.</div>';
+    console.warn('[OTS] super admin activity log load failed:', e && (e.message || e));
+    if (logsEl) logsEl.innerHTML = '<div style="color:var(--muted);">Could not load logs. Admin accounts can still be managed above.</div>';
   }
 }
 
 function _renderSAAdmins() {
   var el = document.getElementById('sa-admins-list');
+  if (!el) return;
   if (!_saAdmins.length) { el.innerHTML = '<div style="color:var(--muted);">No admins yet.</div>'; return; }
   el.innerHTML = '<div class="sa-admin-head">' +
     '<div>Username</div><div>Role</div><div>Access</div><div>Status</div><div></div></div>' +
     _saAdmins.map(function(a) {
       var isSelf = (a.username === currentAdminUsername);
-      var roleLabel = a.role === 'superadmin'
+      var role = normalizeAdminRole(a.role);
+      var isActive = !(a.active === false || String(a.active).toLowerCase() === 'false' || String(a.active) === '0');
+      var roleLabel = role === 'superadmin'
         ? '<span style="color:#7c3aed;font-weight:700;"> Super Admin</span>'
         : '<span style="color:var(--muted);">Admin</span>';
-      var statusLabel = a.active
+      var statusLabel = isActive
         ? '<span style="color:#22c55e;font-weight:600;">Active</span>'
         : '<span style="color:#ef4444;font-weight:600;">Disabled</span>';
+      var safeUsername = otsEscapeHtml(a.username || '');
       var toggleBtn = isSelf ? '<span style="font-size:.7rem;color:var(--muted);">(you)</span>'
-        : a.active
-          ? '<button class="btn-reject" style="font-size:.72rem;padding:.2rem .5rem;" onclick="toggleAdminActive('+a.id+',false,\''+a.username+'\')">Disable</button>'
-          : '<button class="btn-approve" style="font-size:.72rem;padding:.2rem .5rem;" onclick="toggleAdminActive('+a.id+',true,\''+a.username+'\')">Enable</button>';
-      var accessBtn = a.role === 'superadmin' ? '' : '<button class="btn-secondary" style="font-size:.7rem;padding:.22rem .55rem;margin-right:.35rem;" onclick="openAdminAccessModal('+a.id+',\''+otsJsString(a.username)+'\')">Access</button>';
+        : isActive
+          ? '<button type="button" class="btn-reject sa-toggle-admin-btn" data-admin-id="' + otsEscapeHtml(a.id) + '" data-admin-username="' + safeUsername + '" data-admin-active="false" style="font-size:.72rem;padding:.2rem .5rem;">Disable</button>'
+          : '<button type="button" class="btn-approve sa-toggle-admin-btn" data-admin-id="' + otsEscapeHtml(a.id) + '" data-admin-username="' + safeUsername + '" data-admin-active="true" style="font-size:.72rem;padding:.2rem .5rem;">Enable</button>';
+      var accessBtn = role === 'superadmin' ? '' : '<button type="button" class="btn-secondary sa-access-btn" data-admin-id="' + otsEscapeHtml(a.id) + '" data-admin-username="' + safeUsername + '" style="font-size:.7rem;padding:.22rem .55rem;margin-right:.35rem;">Access</button>';
       return '<div class="sa-admin-row">' +
-        '<div class="sa-admin-name">'+a.username+'</div>' +
+        '<div class="sa-admin-name">'+safeUsername+'</div>' +
         '<div class="sa-admin-role">'+roleLabel+'</div>' +
-        '<div class="sa-admin-access">'+adminPermissionSummary(a.permissions, a.role)+'</div>' +
+        '<div class="sa-admin-access">'+otsEscapeHtml(adminPermissionSummary(a.permissions, role))+'</div>' +
         '<div class="sa-admin-status">'+statusLabel+'</div>' +
         '<div class="sa-admin-actions">'+accessBtn+toggleBtn+'</div>' +
         '</div>';
     }).join('');
+  bindSuperAdminAccountButtons();
+}
+
+function bindSuperAdminAccountButtons() {
+  var root = document.getElementById('sa-admins-list');
+  if (!root) return;
+  root.querySelectorAll('.sa-access-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(event) {
+      handleAdminAccessClick(event, btn.getAttribute('data-admin-id'), btn.getAttribute('data-admin-username') || '');
+    }, { passive:false });
+  });
+  root.querySelectorAll('.sa-toggle-admin-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(event) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      toggleAdminActive(btn.getAttribute('data-admin-id'), btn.getAttribute('data-admin-active') === 'true', btn.getAttribute('data-admin-username') || '');
+    }, { passive:false });
+  });
+}
+
+function handleCreateAdminClick(event) {
+  if (event) {
+    try {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    } catch(e) {}
+  }
+  setSuperAdminUploadLock(true);
+  openCreateAdminModal();
+  return false;
+}
+
+function handleAdminAccessClick(event, id, username) {
+  if (event) {
+    try {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    } catch(e) {}
+  }
+  setSuperAdminUploadLock(true);
+  openAdminAccessModal(id, username);
+  return false;
 }
 
 function _renderSALogs(logs) {
   var el = document.getElementById('sa-logs-list');
+  if (!el) return;
   // Strip login-only entries
   var filtered = logs.filter(function(l){ return l.action !== 'login'; });
   if (!filtered.length) { el.innerHTML = '<div style="color:var(--muted);font-size:.85rem;">No activity yet.</div>'; return; }
@@ -8359,7 +9397,7 @@ function _fmtLogDate(ts) {
 
 // -- Platform Reset ------------------------------------------------------------
 function openResetModal() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
   var inp = document.getElementById('resetConfirmInput');
   var btn = document.getElementById('resetSubmitBtn');
   var err = document.getElementById('reset-err');
@@ -8373,7 +9411,7 @@ function closeResetModal() {
   document.getElementById('resetPlatformModal').classList.remove('show');
 }
 async function submitPlatformReset() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
   var inp = document.getElementById('resetConfirmInput');
   var btn = document.getElementById('resetSubmitBtn');
   var err = document.getElementById('reset-err');
@@ -8409,7 +9447,7 @@ async function submitPlatformReset() {
 
 // -- Venue Data Reset ---------------------------------------------------------
 function openClearVenuesModal() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
   var inp = document.getElementById('clearVenuesConfirmInput');
   var btn = document.getElementById('clearVenuesSubmitBtn');
   var err = document.getElementById('clear-venues-err');
@@ -8423,7 +9461,7 @@ function closeClearVenuesModal() {
   document.getElementById('clearVenuesModal').classList.remove('show');
 }
 async function submitClearAllVenues() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
   var inp = document.getElementById('clearVenuesConfirmInput');
   var btn = document.getElementById('clearVenuesSubmitBtn');
   var err = document.getElementById('clear-venues-err');
@@ -8462,7 +9500,9 @@ async function submitClearAllVenues() {
 }
 
 function openCreateAdminModal() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
+  setSuperAdminUploadLock(true);
+  setAdminAccessControlModalOpen(true);
   _createAdminSaving = false;
   document.getElementById('ca-username').value = '';
   document.getElementById('ca-password').value = '';
@@ -8475,13 +9515,14 @@ function openCreateAdminModal() {
   if (btn) { btn.disabled = false; btn.textContent = 'Create Admin'; }
   try { document.body.classList.add('modal-lock'); } catch(e) {}
   document.getElementById('createAdminModal').classList.add('show');
-  setTimeout(function(){ document.getElementById('ca-username').focus(); }, 100);
 }
 function closeCreateAdminModal() {
   if (_createAdminSaving) return;
   var modal = document.getElementById('createAdminModal');
   if (modal) modal.classList.remove('show');
+  setAdminAccessControlModalOpen(false);
   try { document.body.classList.remove('modal-lock'); } catch(e) {}
+  if (currentAdminTab !== 'superadmin') setSuperAdminUploadLock(false);
 }
 function syncCreateAdminPermissionUi() {
   var role = document.getElementById('ca-role') ? document.getElementById('ca-role').value : 'admin';
@@ -8489,7 +9530,7 @@ function syncCreateAdminPermissionUi() {
   if (wrap) wrap.style.display = role === 'superadmin' ? 'none' : '';
 }
 async function submitCreateAdmin() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
   if (_createAdminSaving) return;
   var u = document.getElementById('ca-username').value.trim();
   var p = document.getElementById('ca-password').value;
@@ -8522,10 +9563,12 @@ async function submitCreateAdmin() {
   }
 }
 function openAdminAccessModal(id, username) {
-  if (currentAdminRole !== 'superadmin') return;
-  _adminAccessSaving = false;
+  if (!isCurrentSuperAdmin()) return;
   var admin = _saAdmins.find(function(a){ return Number(a.id) === Number(id); });
   if (!admin || admin.role === 'superadmin') return;
+  setSuperAdminUploadLock(true);
+  setAdminAccessControlModalOpen(true);
+  _adminAccessSaving = false;
   document.getElementById('aa-id').value = id;
   document.getElementById('aa-username').value = username || admin.username || '';
   var sub = document.getElementById('aa-sub');
@@ -8538,15 +9581,18 @@ function openAdminAccessModal(id, username) {
   if (btn) { btn.disabled = false; btn.textContent = 'Save Access'; }
   try { document.body.classList.add('modal-lock'); } catch(e) {}
   document.getElementById('adminAccessModal').classList.add('show');
+  try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch(e) {}
 }
 function closeAdminAccessModal() {
   if (_adminAccessSaving) return;
   var modal = document.getElementById('adminAccessModal');
   if (modal) modal.classList.remove('show');
+  setAdminAccessControlModalOpen(false);
   try { document.body.classList.remove('modal-lock'); } catch(e) {}
+  if (currentAdminTab !== 'superadmin') setSuperAdminUploadLock(false);
 }
 async function saveAdminAccess() {
-  if (currentAdminRole !== 'superadmin') return;
+  if (!isCurrentSuperAdmin()) return;
   if (_adminAccessSaving) return;
   var id = document.getElementById('aa-id').value;
   var username = document.getElementById('aa-username').value || 'admin';
@@ -8602,7 +9648,7 @@ async function logAdminAction(action, details) {
 
 // -- Show/hide super-admin-only UI -----------------------------------------
 function _applySuperAdminVisibility() {
-  var isSA = (currentAdminRole === 'superadmin');
+  var isSA = isCurrentSuperAdmin();
   var btn = document.getElementById('atab-superadmin-btn');
   if (btn) btn.style.display = isSA ? '' : 'none';
   var settingsBtn = document.getElementById('atab-settings');
@@ -8616,18 +9662,22 @@ function _applySuperAdminVisibility() {
 function _applyAdminPermissionUi() {
   if (!adminLoggedIn) return;
   [
+    {cls:'perm-claims-edit', key:'claims'},
     {cls:'perm-venues-edit', key:'venues'},
     {cls:'perm-photos-edit', key:'photos'},
     {cls:'perm-ads-edit', key:'ads'},
     {cls:'perm-members-edit', key:'members'},
     {cls:'perm-points-edit', key:'points'},
-    {cls:'perm-reports-edit', key:'reports'}
+    {cls:'perm-reports-edit', key:'reports'},
+    {cls:'perm-errors-edit', key:'errors'}
   ].forEach(function(item) {
     var allowed = hasAdminPerm(item.key);
     document.querySelectorAll('.' + item.cls).forEach(function(el) {
       el.style.display = allowed ? '' : 'none';
     });
   });
+  var reportTitle = document.getElementById('monthlyReportTitle');
+  if (reportTitle) reportTitle.disabled = !hasAdminPerm('reports');
 }
 
 function adminLogout() {

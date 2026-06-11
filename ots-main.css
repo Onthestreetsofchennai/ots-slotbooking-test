@@ -606,6 +606,23 @@ body.modal-lock{overflow:hidden;touch-action:none;}
 }
 .admin-booking-edit-modal .form-group{margin-bottom:.9rem;}
 .admin-booking-edit-modal textarea.form-input{resize:vertical;min-height:92px;}
+#adminBookingEditModal.show{
+  z-index:500000 !important;
+  pointer-events:auto !important;
+}
+#adminBookingEditModal.show .admin-booking-edit-modal{
+  position:relative;
+  z-index:2;
+  pointer-events:auto !important;
+  isolation:isolate;
+}
+#adminBookingEditModal.show .admin-booking-edit-modal input,
+#adminBookingEditModal.show .admin-booking-edit-modal select,
+#adminBookingEditModal.show .admin-booking-edit-modal textarea,
+#adminBookingEditModal.show .admin-booking-edit-modal button{
+  pointer-events:auto !important;
+  touch-action:manipulation;
+}
 .admin-access-dialog{
   width:min(92vw,760px);
   max-width:760px;
@@ -631,19 +648,54 @@ body.modal-lock{overflow:hidden;touch-action:none;}
   display:flex;
   gap:.62rem;
   align-items:flex-start;
+  width:100%;
+  text-align:left;
   background:rgba(255,255,255,.04);
   border:1px solid var(--border);
   border-radius:6px;
   padding:.75rem .85rem;
   cursor:pointer;
   min-height:76px;
+  color:var(--text);
+  font:inherit;
+  appearance:none;
+  -webkit-appearance:none;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-user-select:none;
+  user-select:none;
 }
-.admin-permission-card input{
+.admin-permission-card:hover,
+.admin-permission-card:focus-visible{
+  border-color:rgba(112,186,244,.46);
+  background:rgba(112,186,244,.07);
+  outline:none;
+}
+.admin-permission-card.is-checked{
+  border-color:rgba(112,186,244,.45);
+  background:rgba(112,186,244,.08);
+}
+.admin-permission-box{
+  display:grid;
+  place-items:center;
   width:16px;
   height:16px;
   margin-top:.1rem;
   flex:0 0 auto;
-  accent-color:#70BAF4;
+  border:2px solid rgba(244,240,255,.75);
+  border-radius:3px;
+  background:#fff;
+  color:#111827;
+  font-size:12px;
+  line-height:1;
+  font-weight:900;
+}
+.admin-permission-card.is-checked .admin-permission-box{
+  border-color:#70BAF4;
+  background:#70BAF4;
+}
+.admin-permission-card.is-checked .admin-permission-box::before{
+  content:"\2713";
 }
 .admin-permission-card strong{
   display:block;
@@ -651,7 +703,11 @@ body.modal-lock{overflow:hidden;touch-action:none;}
   color:var(--text);
   line-height:1.25;
 }
-.admin-permission-card span span{
+.admin-permission-copy{
+  display:block;
+  min-width:0;
+}
+.admin-permission-copy span{
   display:block;
   font-size:.71rem;
   color:var(--muted);
@@ -3410,12 +3466,57 @@ body.modal-lock #memberProfileAdminModal .modal-actions{
   z-index:20 !important;
 }
 
-body.modal-lock button,
-body.modal-lock input,
-body.modal-lock select,
-body.modal-lock textarea{
+body.modal-lock .modal-overlay.show button,
+body.modal-lock .modal-overlay.show input:not([type=file]),
+body.modal-lock .modal-overlay.show select,
+body.modal-lock .modal-overlay.show textarea,
+body.modal-lock .monthly-report-edit-modal.show button,
+body.modal-lock .monthly-report-edit-modal.show input:not([type=file]),
+body.modal-lock .monthly-report-edit-modal.show select,
+body.modal-lock .monthly-report-edit-modal.show textarea{
   pointer-events:auto !important;
   touch-action:manipulation !important;
+}
+
+body.admin-booking-edit-open input[type=file],
+body.admin-booking-edit-open .csv-import-zone,
+body.admin-booking-edit-open .member-phone-import-zone,
+body.admin-booking-edit-open .photo-drop-zone,
+body.admin-booking-edit-open .btn-upload-photo{
+  display:none !important;
+  pointer-events:none !important;
+}
+
+body.admin-booking-edit-open #adminBookingEditModal,
+body.admin-booking-edit-open #adminBookingEditModal *{
+  pointer-events:auto !important;
+}
+
+body.admin-booking-edit-open .admin-booking-edit-modal input.form-input,
+body.admin-booking-edit-open .admin-booking-edit-modal select.form-input,
+body.admin-booking-edit-open .admin-booking-edit-modal textarea.form-input{
+  position:relative;
+  z-index:4;
+  touch-action:auto !important;
+  -webkit-user-select:text;
+  user-select:text;
+}
+
+body.admin-access-control-open input[type=file],
+body.admin-access-control-open .csv-import-zone,
+body.admin-access-control-open .member-phone-import-zone,
+body.admin-access-control-open .photo-drop-zone,
+body.admin-access-control-open .btn-upload-photo,
+body.admin-access-control-open .community-ad-image-btn{
+  display:none !important;
+  pointer-events:none !important;
+}
+
+body.admin-access-control-open #createAdminModal,
+body.admin-access-control-open #createAdminModal *,
+body.admin-access-control-open #adminAccessModal,
+body.admin-access-control-open #adminAccessModal *{
+  pointer-events:auto !important;
 }
 
 @media(max-width:700px){
@@ -5068,6 +5169,12 @@ body.modal-lock textarea{
   padding:.55rem .6rem;
   font:inherit;
 }
+.monthly-report-row-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:.4rem;
+  margin-top:.5rem;
+}
 .report-photo-ok,
 .report-photo-missing{
   display:inline-flex!important;
@@ -5092,6 +5199,160 @@ body.modal-lock textarea{
   background:rgba(255,107,107,.1);
   border:1px solid rgba(255,107,107,.28);
 }
+.monthly-report-edit-btn,
+.monthly-report-remove-btn,
+.monthly-report-restore-btn{
+  border:1px solid rgba(255,107,107,.36);
+  background:rgba(255,107,107,.08);
+  color:#ff9a9a;
+  font-family:'DM Sans',sans-serif;
+  font-size:.66rem;
+  font-weight:900;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  border-radius:999px;
+  padding:.38rem .62rem;
+  cursor:pointer;
+  white-space:nowrap;
+  margin-top:.5rem;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+.monthly-report-edit-btn{
+  border-color:rgba(112,186,244,.38);
+  background:rgba(112,186,244,.1);
+  color:var(--blue);
+}
+.monthly-report-row-actions .monthly-report-edit-btn,
+.monthly-report-row-actions .monthly-report-remove-btn{
+  margin-top:0;
+}
+.monthly-report-edit-btn:hover{
+  border-color:rgba(112,186,244,.7);
+  background:rgba(112,186,244,.16);
+  color:#b9e3ff;
+}
+.monthly-report-remove-btn:hover,
+.monthly-report-restore-btn:hover{
+  border-color:rgba(255,107,107,.68);
+  background:rgba(255,107,107,.14);
+  color:#ffd0d0;
+}
+.monthly-report-restore-btn{
+  margin-left:.45rem;
+  border-color:rgba(112,186,244,.38);
+  background:rgba(112,186,244,.1);
+  color:var(--blue);
+}
+.monthly-report-restore-btn:hover{
+  border-color:rgba(112,186,244,.7);
+  background:rgba(112,186,244,.16);
+  color:#b9e3ff;
+}
+.monthly-report-edit-modal{
+  position:fixed;
+  inset:0;
+  z-index:9999;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:1rem;
+  background:rgba(4,3,12,.72);
+  backdrop-filter:blur(10px);
+}
+.monthly-report-edit-modal.show{
+  display:flex;
+}
+.monthly-report-edit-card{
+  width:min(560px,100%);
+  max-height:calc(100vh - 2rem);
+  overflow:auto;
+  position:relative;
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:8px;
+  background:#171425;
+  padding:1.25rem;
+  box-shadow:0 24px 70px rgba(0,0,0,.45);
+}
+.monthly-report-edit-card h3{
+  margin:.25rem 0 .35rem;
+  color:var(--text);
+  font-family:'Playfair Display',serif;
+  font-size:1.45rem;
+}
+.monthly-report-edit-card p{
+  margin:0 2rem 1rem 0;
+  color:var(--muted);
+  font-size:.82rem;
+  line-height:1.45;
+}
+.monthly-report-edit-card label{
+  display:block;
+  color:var(--muted);
+  font-size:.68rem;
+  font-weight:900;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  margin:.8rem 0 0;
+}
+.monthly-report-edit-card input,
+.monthly-report-edit-card select{
+  width:100%;
+  margin-top:.35rem;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,.055);
+  color:var(--text);
+  border-radius:6px;
+  padding:.75rem .8rem;
+  font:inherit;
+  letter-spacing:0;
+}
+.monthly-report-edit-card select{
+  appearance:none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--purple) 50%) right .9rem center/7px 7px no-repeat,
+    rgba(255,255,255,.055);
+}
+.monthly-report-edit-card input[type="file"]{
+  padding:.65rem;
+  cursor:pointer;
+}
+.monthly-report-edit-photo-preview{
+  width:100%;
+  max-height:220px;
+  object-fit:contain;
+  margin-top:.75rem;
+  border:1px solid var(--border);
+  border-radius:6px;
+  background:rgba(0,0,0,.18);
+}
+.monthly-report-edit-photo-status{
+  min-height:1.2rem;
+  margin-top:.5rem;
+  color:var(--muted);
+  font-size:.78rem;
+  line-height:1.4;
+}
+.monthly-report-edit-close{
+  position:absolute;
+  top:.75rem;
+  right:.75rem;
+  width:34px;
+  height:34px;
+  border:1px solid var(--border);
+  border-radius:6px;
+  background:rgba(255,255,255,.04);
+  color:var(--muted);
+  font-weight:900;
+  cursor:pointer;
+}
+.monthly-report-edit-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:.65rem;
+  margin-top:1rem;
+}
 @media(max-width:980px){
   .monthly-report-controls,
   .monthly-report-summary{
@@ -5102,7 +5363,7 @@ body.modal-lock textarea{
   }
   .monthly-report-table-head,
   .monthly-report-row{
-    min-width:760px;
+    min-width:780px;
   }
 }
 @media(max-width:620px){

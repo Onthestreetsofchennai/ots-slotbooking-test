@@ -46,7 +46,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
 <link rel="apple-touch-icon" sizes="180x180" href="./ots-apple-touch-icon.png">
 <!-- Updated by ChatGPT: backend OTP login integrated, Clerk removed -->
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./ots-main.css">
+<link rel="stylesheet" href="./ots-main.css?v=20260610185837">
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 
@@ -62,7 +62,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
   <div class="nav-inner">
     <div id="navLogo" onclick="handleLogoClick()" title="On The Streets" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:.75rem;"><img src="./ots-brand-mark.png" decoding="async" alt="On The Streets of Chennai" style="height:50px;width:auto;display:block;"> <span class="pending-badge" id="pending-count-badge" style="display:none">0</span></div>
     <div class="nav-tabs" id="publicNavTabs">
-      <button class="ntab active" id="ntab-home" onclick="showPage('home')">&#127908; Home</button>
+      <button class="ntab active" id="ntab-home" onclick="openPublicPage('home')">&#127908; Home</button>
       <button class="ntab" id="ntab-form" style="display:none;" onclick="showPage('form')">&#128221; Book</button>
     </div>
     <div style="display:flex;gap:.8rem;align-items:center;">
@@ -459,11 +459,11 @@ window.OTS_ADMIN_ENTRY = './admin.html';
     <!-- Avatar + completion bar -->
     <div style="display:flex;flex-direction:column;align-items:center;gap:1.1rem;margin-bottom:2rem;">
       <div class="prof-avatar-wrap">
-        <div class="prof-avatar-lg" id="profAvatarLg" onclick="document.getElementById('globalAvatarInput').click()" title="Tap to change photo">
+        <div class="prof-avatar-lg" id="profAvatarLg" onclick="return openFileInputSafely('globalAvatarInput')" title="Tap to change photo">
           <img id="profAvatarLgImg" src="" alt="" style="display:none;">
           <span id="profAvatarLgInitial"></span>
         </div>
-        <button class="prof-avatar-edit-btn" onclick="document.getElementById('globalAvatarInput').click()" title="Change photo"></button>
+        <button class="prof-avatar-edit-btn" type="button" onclick="return openFileInputSafely('globalAvatarInput')" title="Change photo"></button>
       </div>
       <div style="width:100%;max-width:340px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;">
@@ -560,7 +560,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
       </div>
       <div class="prof-field">
         <label class="prof-label">ID Proof Photo</label>
-        <div class="id-proof-upload-area" id="idProofUploadArea" onclick="document.getElementById('idProofInput').click()">
+        <div class="id-proof-upload-area" id="idProofUploadArea" onclick="return openFileInputSafely('idProofInput')">
           <div id="idProofEmpty" style="display:flex;flex-direction:column;align-items:center;gap:.3rem;">
             <span style="font-size:1.5rem;"></span>
             <span style="font-size:.82rem;color:var(--muted);font-weight:600;">Tap to upload ID proof</span>
@@ -682,7 +682,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
           <div style="font-size:.82rem;color:var(--muted);margin-top:.25rem;">Automatic technical reports from web app and Android app. Personal form details are not captured.</div>
         </div>
         <button class="filter-btn" onclick="loadClientErrorReports()">Refresh</button>
-        <button class="filter-btn" onclick="testClientErrorReporting()">Send Test</button>
+        <button class="filter-btn perm-errors-edit" onclick="testClientErrorReporting()">Send Test</button>
       </div>
       <div id="clientErrorReportsList" class="error-report-list">
         <div class="table-empty"><span class="emoji"></span>No error reports loaded</div>
@@ -779,14 +779,14 @@ window.OTS_ADMIN_ENTRY = './admin.html';
           <div style="font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-bottom:.3rem;">Front Page Photos</div>
           <div style="font-size:.82rem;color:var(--muted);">Photos you upload here scroll across the home page automatically.</div>
         </div>
-        <label class="btn-upload-photo perm-photos-edit" for="photoFileInput">
+        <button type="button" class="btn-upload-photo perm-photos-edit" onclick="return openFileInputSafely('photoFileInput')">
           <span> Upload Photos</span>
-          <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none;" onchange="handlePhotoUpload(event)">
-        </label>
+        </button>
+        <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none;" onchange="handlePhotoUpload(event)">
       </div>
 
       <!-- Drop zone -->
-      <div class="photo-drop-zone perm-photos-edit" id="photoDropZone" onclick="document.getElementById('photoFileInput').click()">
+      <div class="photo-drop-zone perm-photos-edit" id="photoDropZone" onclick="return openFileInputSafely('photoFileInput')">
         <div class="pdz-icon"></div>
         <div class="pdz-title">Drop images here or click to upload</div>
         <div class="pdz-sub">JPG, PNG, WEBP - multiple files OK - Max 5 MB each</div>
@@ -813,7 +813,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
           <input type="text" class="form-input" id="communityAdCta" placeholder="Button text, e.g. View Details">
         </div>
         <div class="community-ad-image-tools">
-          <label class="community-ad-image-btn" for="communityAdImageInput">Upload Image</label>
+          <button type="button" class="community-ad-image-btn" onclick="return openFileInputSafely('communityAdImageInput')">Upload Image</button>
           <input type="file" id="communityAdImageInput" accept="image/*" style="display:none;" onchange="handleCommunityAdImageUpload(event)">
           <button type="button" class="community-ad-image-remove" onclick="removeCommunityAdImage()">Remove Image</button>
         </div>
@@ -984,7 +984,8 @@ window.OTS_ADMIN_ENTRY = './admin.html';
           </div>
           <div class="monthly-report-actions">
             <button class="filter-btn" type="button" onclick="generateMonthlyReportPreview(true)">Refresh Preview</button>
-            <button class="btn-add-venue perm-reports-edit" type="button" onclick="exportMonthlyReportPDF()">Print / Save PDF</button>
+            <button class="filter-btn perm-reports-edit" type="button" onclick="viewMonthlyReport()">View Report</button>
+            <button class="btn-add-venue perm-reports-edit" type="button" onclick="downloadMonthlyReportPDF()">Download Report</button>
           </div>
         </div>
 
@@ -1067,7 +1068,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
       <div class="panel" style="margin-bottom:2rem;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
           <div style="font-family:'Playfair Display',serif;font-size:1rem;font-weight:700;">Admin Accounts</div>
-          <button class="btn-add-venue" onclick="openCreateAdminModal()">+ Add Admin</button>
+          <button type="button" class="btn-add-venue" onclick="return handleCreateAdminClick(event)">+ Add Admin</button>
         </div>
         <div id="sa-admins-list"><div style="color:var(--muted);font-size:.85rem;">Loading...</div></div>
       </div>
@@ -1158,7 +1159,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
 </div>
 
 <!-- CREATE ADMIN MODAL -->
-<div class="modal-overlay" id="createAdminModal">
+<div class="modal-overlay" id="createAdminModal" autocomplete="off" data-form-type="other">
   <div class="modal admin-access-dialog">
     <button type="button" class="admin-modal-close" onclick="closeCreateAdminModal()" aria-label="Close add admin">&times;</button>
     <div class="modal-title">Add Admin</div>
@@ -1166,11 +1167,11 @@ window.OTS_ADMIN_ENTRY = './admin.html';
     <div class="admin-access-fields">
       <div class="form-group">
         <label class="form-label">Username</label>
-        <input type="text" class="form-input" id="ca-username" placeholder="e.g. ravi" autocomplete="off">
+        <input type="text" class="form-input" id="ca-username" placeholder="e.g. ravi" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
       </div>
       <div class="form-group">
         <label class="form-label">Password</label>
-        <input type="password" class="form-input" id="ca-password" placeholder="Min 4 characters" autocomplete="new-password">
+        <input type="password" class="form-input" id="ca-password" placeholder="Min 4 characters" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
       </div>
       <div class="form-group">
         <label class="form-label">Role</label>
@@ -1194,13 +1195,13 @@ window.OTS_ADMIN_ENTRY = './admin.html';
 </div>
 
 <!-- EDIT ADMIN ACCESS MODAL -->
-<div class="modal-overlay" id="adminAccessModal">
+<div class="modal-overlay" id="adminAccessModal" autocomplete="off" data-form-type="other">
   <div class="modal admin-access-dialog">
     <button type="button" class="admin-modal-close" onclick="closeAdminAccessModal()" aria-label="Close admin access">&times;</button>
     <div class="modal-title">Admin Access</div>
     <div class="modal-sub" id="aa-sub">Choose what this admin can edit.</div>
-    <input type="hidden" id="aa-id">
-    <input type="hidden" id="aa-username">
+    <input type="hidden" id="aa-id" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+    <input type="hidden" id="aa-username" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
     <div class="form-group" style="margin-top:1rem;">
       <label class="form-label">Allowed Edit Access</label>
       <div id="aa-permissions-list"></div>
@@ -1273,7 +1274,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
     <img id="proofPreview" style="display:none;width:100%;border-radius:8px;margin-bottom:.8rem;">
     <!-- File input is hidden; the button below triggers it directly via .click() -->
     <input type="file" id="proofFileInput" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;" onchange="previewProof(this)">
-    <button type="button" id="proofChooseBtn" class="proof-file-label" onclick="document.getElementById('proofFileInput').click()">
+    <button type="button" id="proofChooseBtn" class="proof-file-label" onclick="return openFileInputSafely('proofFileInput')">
        Choose Photo
     </button>
 
@@ -1344,7 +1345,18 @@ window.OTS_ADMIN_ENTRY = './admin.html';
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Date</label><input class="form-input" id="abe-date" type="date"></div>
-      <div class="form-group"><label class="form-label">Slot Type</label><select class="form-input" id="abe-type"><option value="">Select</option><option>Solo</option><option>2 Piece</option><option>3 Piece</option><option>4 Piece</option><option>Group</option></select></div>
+      <div class="form-group">
+        <label class="form-label">Slot Type</label>
+        <input class="form-input" id="abe-type" list="abe-type-options" placeholder="Solo / Duo / 4 Piece">
+        <datalist id="abe-type-options">
+          <option value="Solo"></option>
+          <option value="Duo"></option>
+          <option value="2 Piece"></option>
+          <option value="3 Piece"></option>
+          <option value="4 Piece"></option>
+          <option value="Group"></option>
+        </datalist>
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Team / Performer Name</label><input class="form-input" id="abe-team" placeholder="Team or performer"></div>
@@ -1400,7 +1412,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
     <div class="install-help-note" id="installHelpNote">After installing, open OTS from the icon and login normally.</div>
   </div>
 </div>
-<script src="./ots-app-core.js"></script>
+<script src="./ots-app-core.js?v=20260610185837"></script>
 
 <!-- APPROVAL NOTIFICATION BANNER -->
 <!-- =============== NOTIFICATION PANEL =============== -->
@@ -1550,7 +1562,7 @@ window.OTS_ADMIN_ENTRY = './admin.html';
 
 <!-- =============== MOBILE BOTTOM NAV =============== -->
 <nav id="mobile-nav">
-  <button class="mn-item active" id="mn-home" onclick="showPage('home')">
+  <button class="mn-item active" id="mn-home" onclick="openPublicPage('home')">
     <span class="mn-icon">&#127968;</span>
     <span class="mn-label">Home</span>
   </button>
@@ -1583,9 +1595,9 @@ window.OTS_ADMIN_ENTRY = './admin.html';
   </button>
 </nav>
 
-<script src="./ots-boot.js"></script>
+<script src="./ots-boot.js?v=20260610185837"></script>
 
-<script src="./ots-mobile-scroll.js"></script>
+<script src="./ots-mobile-scroll.js?v=20260610185837"></script>
 
 
 <div class="modal-overlay" id="memberProfileAdminModal">
